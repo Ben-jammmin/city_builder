@@ -7,7 +7,7 @@ from typing import Any
 from .city_map import CityMap
 from .models import BuildingType, CityStats, TerrainType, Tile, ZoneType
 
-SAVE_VERSION = 2
+SAVE_VERSION = 3
 
 
 def save_game(city_map: CityMap, stats: CityStats, path: str | Path) -> None:
@@ -53,6 +53,7 @@ def tile_to_data(tile: Tile) -> dict[str, Any]:
     return {
         "terrain": tile.terrain.value,
         "zone": tile.zone.value,
+        "zone_level": tile.zone_level,
         "building": tile.building.value,
         "has_road": tile.has_road,
         "has_power_line": tile.has_power_line,
@@ -70,6 +71,7 @@ def tile_from_data(data: dict[str, Any]) -> Tile:
     return Tile(
         terrain=TerrainType(data.get("terrain", TerrainType.GRASS.value)),
         zone=ZoneType(data.get("zone", ZoneType.EMPTY.value)),
+        zone_level=data.get("zone_level", 1),
         building=BuildingType(data.get("building", BuildingType.NONE.value)),
         has_road=data.get("has_road", False),
         has_power_line=data.get("has_power_line", False),

@@ -21,6 +21,22 @@ ZONE_COST = {
     "commercial": 35,
     "industrial": 30,
 }
+ZONE_LEVEL_COST_MULTIPLIERS = {
+    1: 1.0,
+    2: 3.0,
+}
+ZONE_LEVEL_CAPACITY_MULTIPLIERS = {
+    1: 1.0,
+    2: 2.35,
+}
+ZONE_LEVEL_GROWTH_MULTIPLIERS = {
+    1: 1.0,
+    2: 0.85,
+}
+ZONE_LEVEL_LABELS = {
+    1: "Standard",
+    2: "Dense",
+}
 ROAD_COST = 60
 BULLDOZE_COST = 8
 POWER_LINE_COST = 20
@@ -35,7 +51,9 @@ TERRAIN_CLEAR_COSTS = {
 
 BUILDING_COST = {
     "power_plant": 2500,
+    "large_power_plant": 6500,
     "water_tower": 1200,
+    "large_water_tower": 3200,
     "police": 900,
     "fire": 900,
     "school": 1100,
@@ -50,7 +68,9 @@ WATER_PIPE_MAINTENANCE = 1
 
 BUILDING_MAINTENANCE = {
     "power_plant": 45,
+    "large_power_plant": 115,
     "water_tower": 25,
+    "large_water_tower": 70,
     "police": 35,
     "fire": 35,
     "school": 40,
@@ -60,6 +80,14 @@ BUILDING_MAINTENANCE = {
 
 POWER_PLANT_CAPACITY = 220
 WATER_TOWER_CAPACITY = 180
+POWER_CAPACITY_BY_BUILDING = {
+    "power_plant": POWER_PLANT_CAPACITY,
+    "large_power_plant": 650,
+}
+WATER_CAPACITY_BY_BUILDING = {
+    "water_tower": WATER_TOWER_CAPACITY,
+    "large_water_tower": 520,
+}
 SERVICE_RADIUS = 6
 FIRE_RADIUS = 6
 POLICE_RADIUS = 6

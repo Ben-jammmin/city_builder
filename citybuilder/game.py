@@ -10,8 +10,10 @@ from .models import (
     TOOL_HOTKEYS,
     TOOL_LABELS,
     TOOL_TO_BUILDING,
+    TOOL_TO_ZONE,
     VIEW_LABELS,
     VIEW_ORDER,
+    BuildingType,
     CityStats,
     TerrainType,
     Tool,
@@ -42,6 +44,8 @@ from .settings import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
     ZONE_COST,
+    ZONE_LEVEL_COST_MULTIPLIERS,
+    ZONE_LEVEL_LABELS,
 )
 from .simulation import Simulation
 from .terrain import generate_terrain
@@ -102,7 +106,11 @@ class Game:
             elif event.type == pygame.MOUSEMOTION:
                 self._handle_mouse_motion(event)
             elif event.type == pygame.MOUSEWHEEL:
-                self.camera.change_zoom(event.y * 0.08, pygame.mouse.get_pos())
+                mouse_pos = pygame.mouse.get_pos()
+                if self.sidebar.contains(mouse_pos):
+                    self.sidebar.handle_scroll(event.y)
+                else:
+                    self.camera.change_zoom(event.y * 0.08, mouse_pos)
             elif event.type == pygame.VIDEORESIZE and not self.fullscreen:
                 self._resize_window(event.w, event.h)
 
@@ -270,13 +278,9 @@ class Game:
         if self.active_tool in TOOL_TO_BUILDING:
             self._place_building(tile_pos)
             return
-
-        zone = {
-            Tool.RESIDENTIAL: ZoneType.RESIDENTIAL,
-            Tool.COMMERCIAL: ZoneType.COMMERCIAL,
-            Tool.INDUSTRIAL: ZoneType.INDUSTRIAL,
-        }[self.active_tool]
-        self._place_zone(tile_pos, zone)
+        if self.active_tool in TOOL_TO_ZONE:
+            zone, level = TOOL_TO_ZONE[self.active_tool]
+            self._place_zone(tile_pos, zone, level)
 
     def _bulldoze_at_mouse(self, pos: tuple[int, int]) -> None:
         tile_pos = self._mouse_tile(pos)
@@ -285,24 +289,24 @@ class Game:
         self.painted_this_drag.add(tile_pos)
         self._bulldoze(tile_pos)
 
-    def _place_zone(self, tile_pos: tuple[int, int], zone: ZoneType) -> None:
-        cost = ZONE_COST[zone.value]
+    def _place_zone(self, tile_pos: tuple[int, int], zone: ZoneType, level: int = 1) -> None:
+        cost = self._zone_cost(zone, level)
         if not self._can_afford(cost):
             return
-        if self.map.place_zone(*tile_pos, zone):
+        if self.map.place_zone(*tile_pos, zone, level):
             self.stats.money -= cost
-            self.stats.add_message(f"Zoned {zone.value} for ${cost}.")
+            self.stats.add_message(f"Zoned {self._zone_label(zone, level)} for ${cost}.")
         else:
-            self._add_zone_blocked_message(tile_pos, zone)
+            self._add_zone_blocked_message(tile_pos, zone, level)
 
-    def _add_zone_blocked_message(self, tile_pos: tuple[int, int], zone: ZoneType) -> None:
+    def _add_zone_blocked_message(self, tile_pos: tuple[int, int], zone: ZoneType, level: int = 1) -> None:
         x, y = tile_pos
         tile = self.map.get(x, y)
-        if tile.terrain != TerrainType.GRASS:
-            self.stats.add_message("Terrain not clear - bulldoze first.")
-        elif not self.map.is_buildable_land(x, y):
+        if self.map.is_water(x, y):
             self.stats.add_message("Cannot build on water.")
-        elif tile.zone == zone:
+        elif tile.terrain != TerrainType.GRASS:
+            self.stats.add_message("Terrain not clear - bulldoze first.")
+        elif tile.zone == zone and tile.zone_level == level:
             self.stats.add_message("Zone already exists here.")
         elif tile.building != BuildingType.NONE or tile.has_road or tile.has_power_line or tile.has_water_pipe:
             self.stats.add_message("Tile already occupied.")
@@ -310,6 +314,16 @@ class Game:
             self.stats.add_message("Zone needs adjacent road.")
         else:
             self.stats.add_message("Cannot place zone.")
+
+    def _zone_cost(self, zone: ZoneType, level: int) -> int:
+        multiplier = ZONE_LEVEL_COST_MULTIPLIERS.get(level, 1.0)
+        return int(ZONE_COST[zone.value] * multiplier)
+
+    def _zone_label(self, zone: ZoneType, level: int) -> str:
+        label = zone.value.replace("_", " ")
+        if level <= 1:
+            return label
+        return f"{ZONE_LEVEL_LABELS.get(level, f'Level {level}')} {label}".lower()
 
     def _place_road(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(ROAD_COST):
@@ -371,10 +385,10 @@ class Game:
         else:
             x, y = tile_pos
             tile = self.map.get(x, y)
-            if tile.terrain != TerrainType.GRASS:
-                self.stats.add_message("Terrain not clear - bulldoze first.")
-            elif not self.map.is_buildable_land(x, y):
+            if self.map.is_water(x, y):
                 self.stats.add_message("Cannot build on water.")
+            elif tile.terrain != TerrainType.GRASS:
+                self.stats.add_message("Terrain not clear - bulldoze first.")
             elif not tile.is_empty:
                 self.stats.add_message("Tile already occupied.")
             else:

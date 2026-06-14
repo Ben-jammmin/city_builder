@@ -135,6 +135,49 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(stats.power_satisfaction, 100)
         self.assertEqual(stats.water_satisfaction, 100)
 
+    def test_large_utility_buildings_provide_more_capacity(self) -> None:
+        city_map = CityMap(4, 4)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        city_map.place_building(0, 0, BuildingType.LARGE_POWER_PLANT)
+        city_map.place_building(1, 0, BuildingType.LARGE_WATER_TOWER)
+
+        simulation._update_system_totals()
+
+        self.assertEqual(stats.power_capacity, 650)
+        self.assertEqual(stats.water_capacity, 520)
+
+    def test_dense_residential_and_commercial_zones_have_more_capacity(self) -> None:
+        standard_map = CityMap(5, 5)
+        dense_map = CityMap(5, 5)
+        standard_stats = CityStats()
+        dense_stats = CityStats()
+        standard_sim = Simulation(standard_map, standard_stats)
+        dense_sim = Simulation(dense_map, dense_stats)
+
+        for city_map in (standard_map, dense_map):
+            self.add_basic_power_and_water(city_map)
+            city_map.place_zone(1, 2, ZoneType.RESIDENTIAL)
+            city_map.place_zone(2, 2, ZoneType.COMMERCIAL)
+            city_map.get(1, 2).development = 1.0
+            city_map.get(2, 2).development = 1.0
+            city_map.get(1, 2).land_value = 1.0
+            city_map.get(2, 2).land_value = 1.0
+        dense_map.place_zone(1, 2, ZoneType.RESIDENTIAL, level=2)
+        dense_map.place_zone(2, 2, ZoneType.COMMERCIAL, level=2)
+        dense_map.get(1, 2).development = 1.0
+        dense_map.get(2, 2).development = 1.0
+        dense_map.get(1, 2).land_value = 1.0
+        dense_map.get(2, 2).land_value = 1.0
+
+        standard_sim._apply_capacity(standard_map.get(1, 2))
+        standard_sim._apply_capacity(standard_map.get(2, 2))
+        dense_sim._apply_capacity(dense_map.get(1, 2))
+        dense_sim._apply_capacity(dense_map.get(2, 2))
+
+        self.assertGreater(dense_map.get(1, 2).residents, standard_map.get(1, 2).residents)
+        self.assertGreater(dense_map.get(2, 2).jobs, standard_map.get(2, 2).jobs)
+
     def test_unpowered_zones_are_reported(self) -> None:
         city_map = CityMap(4, 4)
         stats = CityStats()

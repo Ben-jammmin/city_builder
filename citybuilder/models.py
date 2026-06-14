@@ -30,7 +30,9 @@ class TerrainType(Enum):
 class BuildingType(Enum):
     NONE = "none"
     POWER_PLANT = "power_plant"
+    LARGE_POWER_PLANT = "large_power_plant"
     WATER_TOWER = "water_tower"
+    LARGE_WATER_TOWER = "large_water_tower"
     POLICE = "police"
     FIRE = "fire"
     SCHOOL = "school"
@@ -41,13 +43,17 @@ class BuildingType(Enum):
 class Tool(Enum):
     INSPECT = "inspect"
     RESIDENTIAL = "residential"
+    DENSE_RESIDENTIAL = "dense_residential"
     COMMERCIAL = "commercial"
+    DENSE_COMMERCIAL = "dense_commercial"
     INDUSTRIAL = "industrial"
     ROAD = "road"
     POWER_LINE = "power_line"
     WATER_PIPE = "water_pipe"
     POWER_PLANT = "power_plant"
+    LARGE_POWER_PLANT = "large_power_plant"
     WATER_TOWER = "water_tower"
+    LARGE_WATER_TOWER = "large_water_tower"
     POLICE = "police"
     FIRE = "fire"
     SCHOOL = "school"
@@ -101,7 +107,9 @@ VIEW_ORDER = [
 BUILDING_LABELS = {
     BuildingType.NONE: "None",
     BuildingType.POWER_PLANT: "Power Plant",
+    BuildingType.LARGE_POWER_PLANT: "Large Power Plant",
     BuildingType.WATER_TOWER: "Water Tower",
+    BuildingType.LARGE_WATER_TOWER: "Large Water Tower",
     BuildingType.POLICE: "Police",
     BuildingType.FIRE: "Fire",
     BuildingType.SCHOOL: "School",
@@ -112,13 +120,17 @@ BUILDING_LABELS = {
 TOOL_LABELS = {
     Tool.INSPECT: "Inspect",
     Tool.RESIDENTIAL: "Residential",
+    Tool.DENSE_RESIDENTIAL: "Dense Residential",
     Tool.COMMERCIAL: "Commercial",
+    Tool.DENSE_COMMERCIAL: "Dense Commercial",
     Tool.INDUSTRIAL: "Industrial",
     Tool.ROAD: "Road",
     Tool.POWER_LINE: "Power Line",
     Tool.WATER_PIPE: "Water Pipe",
     Tool.POWER_PLANT: "Power Plant",
+    Tool.LARGE_POWER_PLANT: "Large Power Plant",
     Tool.WATER_TOWER: "Water Tower",
+    Tool.LARGE_WATER_TOWER: "Large Water Tower",
     Tool.POLICE: "Police",
     Tool.FIRE: "Fire",
     Tool.SCHOOL: "School",
@@ -149,7 +161,9 @@ MENU_TOOLS = {
     "Zones": [
         Tool.INSPECT,
         Tool.RESIDENTIAL,
+        Tool.DENSE_RESIDENTIAL,
         Tool.COMMERCIAL,
+        Tool.DENSE_COMMERCIAL,
         Tool.INDUSTRIAL,
         Tool.BULLDOZE,
     ],
@@ -158,7 +172,9 @@ MENU_TOOLS = {
         Tool.POWER_LINE,
         Tool.WATER_PIPE,
         Tool.POWER_PLANT,
+        Tool.LARGE_POWER_PLANT,
         Tool.WATER_TOWER,
+        Tool.LARGE_WATER_TOWER,
     ],
     "Services": [
         Tool.POLICE,
@@ -177,12 +193,32 @@ TOOL_ORDER = [tool for tools in MENU_TOOLS.values() for tool in tools]
 
 TOOL_TO_BUILDING = {
     Tool.POWER_PLANT: BuildingType.POWER_PLANT,
+    Tool.LARGE_POWER_PLANT: BuildingType.LARGE_POWER_PLANT,
     Tool.WATER_TOWER: BuildingType.WATER_TOWER,
+    Tool.LARGE_WATER_TOWER: BuildingType.LARGE_WATER_TOWER,
     Tool.POLICE: BuildingType.POLICE,
     Tool.FIRE: BuildingType.FIRE,
     Tool.SCHOOL: BuildingType.SCHOOL,
     Tool.TRAIN_STATION: BuildingType.TRAIN_STATION,
     Tool.AIRPORT: BuildingType.AIRPORT,
+}
+
+TOOL_TO_ZONE = {
+    Tool.RESIDENTIAL: (ZoneType.RESIDENTIAL, 1),
+    Tool.DENSE_RESIDENTIAL: (ZoneType.RESIDENTIAL, 2),
+    Tool.COMMERCIAL: (ZoneType.COMMERCIAL, 1),
+    Tool.DENSE_COMMERCIAL: (ZoneType.COMMERCIAL, 2),
+    Tool.INDUSTRIAL: (ZoneType.INDUSTRIAL, 1),
+}
+
+POWER_SOURCE_BUILDINGS = {
+    BuildingType.POWER_PLANT,
+    BuildingType.LARGE_POWER_PLANT,
+}
+
+WATER_SOURCE_BUILDINGS = {
+    BuildingType.WATER_TOWER,
+    BuildingType.LARGE_WATER_TOWER,
 }
 
 
@@ -197,6 +233,7 @@ def menu_for_tool(tool: Tool) -> str:
 class Tile:
     terrain: TerrainType = TerrainType.GRASS
     zone: ZoneType = ZoneType.EMPTY
+    zone_level: int = 1
     building: BuildingType = BuildingType.NONE
     has_road: bool = False
     has_power_line: bool = False
@@ -225,6 +262,7 @@ class Tile:
 
     def clear(self) -> None:
         self.zone = ZoneType.EMPTY
+        self.zone_level = 1
         self.building = BuildingType.NONE
         self.has_road = False
         self.has_power_line = False

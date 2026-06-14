@@ -1,6 +1,19 @@
 import unittest
 
-from citybuilder.models import BuildingType, CityStats, TerrainType, Tile, VIEW_LABELS, VIEW_ORDER, ViewMode, ZoneType
+from citybuilder.models import (
+    POWER_SOURCE_BUILDINGS,
+    TOOL_TO_ZONE,
+    WATER_SOURCE_BUILDINGS,
+    BuildingType,
+    CityStats,
+    TerrainType,
+    Tile,
+    Tool,
+    VIEW_LABELS,
+    VIEW_ORDER,
+    ViewMode,
+    ZoneType,
+)
 from citybuilder.settings import MAX_TAX_RATE, MIN_TAX_RATE
 
 
@@ -9,6 +22,7 @@ class TileTests(unittest.TestCase):
         tile = Tile(
             terrain=TerrainType.HILL,
             zone=ZoneType.COMMERCIAL,
+            zone_level=2,
             building=BuildingType.SCHOOL,
             has_road=True,
             has_power_line=True,
@@ -30,6 +44,7 @@ class TileTests(unittest.TestCase):
 
         self.assertEqual(tile.terrain, TerrainType.HILL)
         self.assertEqual(tile.zone, ZoneType.EMPTY)
+        self.assertEqual(tile.zone_level, 1)
         self.assertEqual(tile.building, BuildingType.NONE)
         self.assertFalse(tile.has_road)
         self.assertFalse(tile.has_power_line)
@@ -99,6 +114,16 @@ class ViewModeTests(unittest.TestCase):
         self.assertIn(ViewMode.TERRAIN, VIEW_ORDER)
         self.assertEqual(VIEW_LABELS[ViewMode.POWER], "Power")
         self.assertEqual(VIEW_LABELS[ViewMode.TERRAIN], "Terrain")
+
+
+class ToolMappingTests(unittest.TestCase):
+    def test_dense_zone_tools_map_to_higher_zone_level(self) -> None:
+        self.assertEqual(TOOL_TO_ZONE[Tool.DENSE_RESIDENTIAL], (ZoneType.RESIDENTIAL, 2))
+        self.assertEqual(TOOL_TO_ZONE[Tool.DENSE_COMMERCIAL], (ZoneType.COMMERCIAL, 2))
+
+    def test_large_utility_buildings_are_source_buildings(self) -> None:
+        self.assertIn(BuildingType.LARGE_POWER_PLANT, POWER_SOURCE_BUILDINGS)
+        self.assertIn(BuildingType.LARGE_WATER_TOWER, WATER_SOURCE_BUILDINGS)
 
 
 if __name__ == "__main__":

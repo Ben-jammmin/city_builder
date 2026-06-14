@@ -11,7 +11,7 @@ class SaveLoadTests(unittest.TestCase):
     def test_save_data_round_trips_map_and_stats(self) -> None:
         city_map = CityMap(4, 4)
         city_map.get(0, 0).terrain = TerrainType.HILL
-        city_map.place_zone(1, 1, ZoneType.RESIDENTIAL)
+        city_map.place_zone(1, 1, ZoneType.RESIDENTIAL, level=2)
         city_map.get(1, 1).development = 0.5
         city_map.get(1, 1).fire_risk = 44
         city_map.get(1, 1).crime_risk = 38
@@ -49,6 +49,7 @@ class SaveLoadTests(unittest.TestCase):
         self.assertEqual(loaded_map.height, 4)
         self.assertEqual(loaded_map.get(0, 0).terrain, TerrainType.HILL)
         self.assertEqual(loaded_map.get(1, 1).zone, ZoneType.RESIDENTIAL)
+        self.assertEqual(loaded_map.get(1, 1).zone_level, 2)
         self.assertEqual(loaded_map.get(1, 1).development, 0.5)
         self.assertEqual(loaded_map.get(1, 1).fire_risk, 44)
         self.assertEqual(loaded_map.get(1, 1).crime_risk, 38)
@@ -100,6 +101,7 @@ class SaveLoadTests(unittest.TestCase):
         city_map, stats = from_save_data(old_data)
 
         self.assertEqual(city_map.get(0, 0).zone, ZoneType.COMMERCIAL)
+        self.assertEqual(city_map.get(0, 0).zone_level, 1)
         self.assertEqual(city_map.get(0, 0).terrain, TerrainType.GRASS)
         self.assertEqual(city_map.get(0, 0).building, BuildingType.NONE)
         self.assertFalse(city_map.get(0, 0).has_power_line)

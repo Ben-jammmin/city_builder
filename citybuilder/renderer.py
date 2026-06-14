@@ -4,9 +4,10 @@ import pygame
 
 from .camera import Camera
 from .city_map import CityMap
-from .models import TOOL_TO_BUILDING, BuildingType, TerrainType, Tool, ViewMode, ZoneType
+from .models import POWER_SOURCE_BUILDINGS, TOOL_TO_BUILDING, WATER_SOURCE_BUILDINGS, BuildingType, TerrainType, Tool, ViewMode, ZoneType
 from .pedestrian import PedestrianSystem
 from .settings import COLORS, TILE_SIZE
+from .sprites import SpriteAtlas, tile_variant
 
 
 TERRAIN_COLOR_KEYS = {
@@ -17,7 +18,9 @@ TERRAIN_COLOR_KEYS = {
 
 BUILDING_COLOR_KEYS = {
     BuildingType.POWER_PLANT: "power",
+    BuildingType.LARGE_POWER_PLANT: "power",
     BuildingType.WATER_TOWER: "water",
+    BuildingType.LARGE_WATER_TOWER: "water",
     BuildingType.POLICE: "police",
     BuildingType.FIRE: "fire",
     BuildingType.SCHOOL: "school",
@@ -27,7 +30,9 @@ BUILDING_COLOR_KEYS = {
 
 BUILDING_MARKER_LABELS = {
     BuildingType.POWER_PLANT: "P",
+    BuildingType.LARGE_POWER_PLANT: "P+",
     BuildingType.WATER_TOWER: "W",
+    BuildingType.LARGE_WATER_TOWER: "W+",
     BuildingType.POLICE: "Po",
     BuildingType.FIRE: "F",
     BuildingType.SCHOOL: "S",
@@ -36,16 +41,17 @@ BUILDING_MARKER_LABELS = {
 }
 
 VIEW_MAIN_BUILDINGS = {
-    ViewMode.POWER: BuildingType.POWER_PLANT,
-    ViewMode.WATER: BuildingType.WATER_TOWER,
-    ViewMode.FIRE: BuildingType.FIRE,
-    ViewMode.POLICE: BuildingType.POLICE,
+    ViewMode.POWER: POWER_SOURCE_BUILDINGS,
+    ViewMode.WATER: WATER_SOURCE_BUILDINGS,
+    ViewMode.FIRE: {BuildingType.FIRE},
+    ViewMode.POLICE: {BuildingType.POLICE},
 }
 
 
 class Renderer:
     def __init__(self) -> None:
         self.small_font = pygame.font.SysFont("Segoe UI", 13)
+        self.sprites = SpriteAtlas(self.small_font)
 
     def draw_map(
         self,
@@ -92,12 +98,11 @@ class Renderer:
         zoom: float,
         view_mode: ViewMode,
     ) -> None:
-        self._draw_terrain_base(surface, rect, tile, x, y)
+        self._draw_terrain_base(surface, rect, city_map, tile, x, y)
 
         if view_mode != ViewMode.NORMAL:
             self._draw_view_tile(surface, rect, city_map, tile, x, y, view_mode)
-            grid_color = COLORS["grid_light"] if zoom >= 1.15 else COLORS["grid"]
-            pygame.draw.rect(surface, grid_color, rect, width=1)
+            self._draw_grid(surface, rect, zoom, system_view=True)
             return
 
         if tile.has_road:
@@ -105,16 +110,11 @@ class Renderer:
         elif tile.building != BuildingType.NONE:
             self._draw_service_building(surface, rect, tile)
         elif tile.zone != ZoneType.EMPTY:
-            pygame.draw.rect(surface, COLORS[tile.zone.value], rect)
-            pygame.draw.rect(surface, COLORS["zone_border"], rect, width=1)
-            if tile.development > 0.08:
-                self._draw_building(surface, rect, tile)
+            self.sprites.draw_zone(surface, rect, tile.zone, tile.development, tile.zone_level, tile_variant(x, y))
             self._draw_zone_status(surface, rect, tile)
 
         self._draw_utilities(surface, rect, city_map, tile, x, y)
-
-        grid_color = COLORS["grid_light"] if zoom >= 1.15 else COLORS["grid"]
-        pygame.draw.rect(surface, grid_color, rect, width=1)
+        self._draw_grid(surface, rect, zoom, system_view=False)
 
     def _draw_view_tile(
         self,
@@ -127,7 +127,7 @@ class Renderer:
         view_mode: ViewMode,
     ) -> None:
         if view_mode == ViewMode.TERRAIN:
-            self._draw_terrain_base(surface, rect, tile, x, y)
+            self._draw_terrain_base(surface, rect, city_map, tile, x, y)
             if tile.zone != ZoneType.EMPTY:
                 self._draw_context_zone(surface, rect, tile)
         else:
@@ -147,21 +147,11 @@ class Renderer:
 
         self._draw_context_building_marker(surface, rect, tile, view_mode)
 
-    def _draw_terrain_base(self, surface: pygame.Surface, rect: pygame.Rect, tile, x: int, y: int) -> None:
-        if tile.terrain == TerrainType.GRASS:
-            color = COLORS["empty"] if (x + y) % 2 == 0 else COLORS["empty_alt"]
-        else:
-            color = COLORS[TERRAIN_COLOR_KEYS[tile.terrain]]
-        pygame.draw.rect(surface, color, rect)
-
-        if rect.width < 18:
-            return
+    def _draw_terrain_base(self, surface: pygame.Surface, rect: pygame.Rect, city_map: CityMap, tile, x: int, y: int) -> None:
+        same_neighbors = None
         if tile.terrain == TerrainType.WATER:
-            self._draw_water_detail(surface, rect)
-        elif tile.terrain == TerrainType.FOREST:
-            self._draw_forest_detail(surface, rect)
-        elif tile.terrain == TerrainType.HILL:
-            self._draw_hill_detail(surface, rect)
+            same_neighbors = self._same_terrain_neighbors(city_map, x, y, tile.terrain)
+        self.sprites.draw_terrain(surface, rect, tile.terrain, x, y, same_neighbors)
 
     def _draw_system_view_base(self, surface: pygame.Surface, rect: pygame.Rect, tile) -> None:
         color = (54, 62, 66)
@@ -207,7 +197,7 @@ class Renderer:
         if tile.zone != ZoneType.EMPTY:
             color = (92, 82, 50) if tile.powered else (100, 55, 55)
             pygame.draw.rect(surface, color, rect)
-        if tile.building == BuildingType.POWER_PLANT:
+        if tile.building in POWER_SOURCE_BUILDINGS:
             self._draw_service_building(surface, rect, tile)
         if tile.has_power_line:
             self._draw_power_line(surface, rect, city_map.power_connections(x, y))
@@ -216,7 +206,7 @@ class Renderer:
         if tile.zone != ZoneType.EMPTY:
             color = (45, 78, 94) if tile.watered else (94, 58, 58)
             pygame.draw.rect(surface, color, rect)
-        if tile.building == BuildingType.WATER_TOWER:
+        if tile.building in WATER_SOURCE_BUILDINGS:
             self._draw_service_building(surface, rect, tile)
         if tile.has_water_pipe:
             self._draw_water_pipe(surface, rect, city_map.water_connections(x, y))
@@ -245,25 +235,7 @@ class Renderer:
         return (83, 84, 72)
 
     def _draw_road(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
-        road_width = max(6, int(rect.width * 0.48))
-        half_width = road_width // 2
-        center_x = rect.centerx
-        center_y = rect.centery
-
-        center_rect = pygame.Rect(center_x - half_width, center_y - half_width, road_width, road_width)
-        pygame.draw.rect(surface, COLORS["road"], center_rect)
-
-        arms = {
-            "north": pygame.Rect(center_x - half_width, rect.top, road_width, center_y - rect.top),
-            "east": pygame.Rect(center_x, center_y - half_width, rect.right - center_x, road_width),
-            "south": pygame.Rect(center_x - half_width, center_y, road_width, rect.bottom - center_y),
-            "west": pygame.Rect(rect.left, center_y - half_width, center_x - rect.left, road_width),
-        }
-        for direction, connected in connections.items():
-            if connected:
-                pygame.draw.rect(surface, COLORS["road"], arms[direction])
-
-        self._draw_road_markings(surface, rect, connections)
+        self.sprites.draw_road(surface, rect, connections)
 
     def _draw_road_markings(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
         if rect.width < 18 or rect.height < 18:
@@ -308,24 +280,10 @@ class Renderer:
         pygame.draw.rect(surface, COLORS[tile.zone.value], zone_rect, width=border_width, border_radius=2)
 
     def _draw_building(self, surface: pygame.Surface, rect: pygame.Rect, tile) -> None:
-        pad = max(3, rect.width // 6)
-        height_scale = max(0.25, tile.development)
-        building_rect = rect.inflate(-pad * 2, -pad * 2)
-        building_rect.height = max(4, int(building_rect.height * height_scale))
-        building_rect.bottom = rect.bottom - pad
-        pygame.draw.rect(surface, COLORS["shadow"], building_rect.move(2, 2))
-        pygame.draw.rect(surface, COLORS["building_light"], building_rect)
-        pygame.draw.rect(surface, COLORS["building_dark"], building_rect, width=1)
+        self.sprites.draw_zone_building(surface, rect, tile.zone, tile.development, tile.zone_level)
 
     def _draw_service_building(self, surface: pygame.Surface, rect: pygame.Rect, tile) -> None:
-        color_key = BUILDING_COLOR_KEYS[tile.building]
-        pygame.draw.rect(surface, COLORS[color_key], rect)
-        inner = rect.inflate(-max(4, rect.width // 5), -max(4, rect.height // 5))
-        pygame.draw.rect(surface, COLORS["building_light"], inner, border_radius=2)
-        label = BUILDING_MARKER_LABELS[tile.building]
-        if rect.width >= 22:
-            text = self.small_font.render(label, True, COLORS["building_dark"])
-            surface.blit(text, (rect.centerx - text.get_width() // 2, rect.centery - text.get_height() // 2))
+        self.sprites.draw_civic_building(surface, rect, tile.building)
 
     def _draw_context_building_marker(
         self,
@@ -336,7 +294,7 @@ class Renderer:
     ) -> None:
         if tile.building == BuildingType.NONE:
             return
-        if tile.building == VIEW_MAIN_BUILDINGS.get(view_mode):
+        if tile.building in VIEW_MAIN_BUILDINGS.get(view_mode, set()):
             return
 
         marker_size = max(10, int(rect.width * 0.56))
@@ -368,56 +326,22 @@ class Renderer:
             self._draw_water_pipe(surface, rect, city_map.water_connections(x, y))
 
     def _draw_power_line(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
-        line_width = max(2, rect.width // 10)
-        node_radius = max(3, rect.width // 8)
-        center = (rect.centerx, rect.centery)
-        endpoints = {
-            "north": (rect.centerx, rect.top + 2),
-            "east": (rect.right - 2, rect.centery),
-            "south": (rect.centerx, rect.bottom - 2),
-            "west": (rect.left + 2, rect.centery),
-        }
-
-        if not any(connections.values()):
-            pygame.draw.circle(surface, COLORS["power"], center, node_radius)
-            return
-
-        for direction, connected in connections.items():
-            if connected:
-                pygame.draw.line(surface, COLORS["power"], center, endpoints[direction], line_width)
-        pygame.draw.circle(surface, COLORS["power"], center, node_radius)
+        self.sprites.draw_power_line(surface, rect, connections)
 
     def _draw_water_pipe(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
-        line_width = max(3, rect.width // 8)
-        node_radius = max(3, rect.width // 10)
-        center = (rect.centerx, rect.centery)
-        endpoints = {
-            "north": (rect.centerx, rect.top + 2),
-            "east": (rect.right - 2, rect.centery),
-            "south": (rect.centerx, rect.bottom - 2),
-            "west": (rect.left + 2, rect.centery),
-        }
-
-        if not any(connections.values()):
-            pygame.draw.circle(surface, COLORS["water"], center, node_radius)
-            return
-
-        for direction, connected in connections.items():
-            if connected:
-                pygame.draw.line(surface, COLORS["water"], center, endpoints[direction], line_width)
-        pygame.draw.circle(surface, COLORS["water"], center, node_radius)
+        self.sprites.draw_water_pipe(surface, rect, connections)
 
     def _draw_zone_status(self, surface: pygame.Surface, rect: pygame.Rect, tile) -> None:
-        if rect.width < 16:
+        if rect.width < 18:
             return
         if not tile.powered:
-            pygame.draw.circle(surface, COLORS["power"], (rect.left + 7, rect.top + 7), 3)
+            self._draw_status_badge(surface, (rect.left + 8, rect.top + 8), COLORS["power"], "power", rect.width)
         if not tile.watered:
-            pygame.draw.circle(surface, COLORS["water"], (rect.right - 7, rect.top + 7), 3)
+            self._draw_status_badge(surface, (rect.right - 8, rect.top + 8), COLORS["water"], "water", rect.width)
         if tile.fire_risk >= 70:
-            pygame.draw.circle(surface, COLORS["fire"], (rect.centerx, rect.bottom - 7), 3)
+            self._draw_status_badge(surface, (rect.left + 8, rect.bottom - 8), COLORS["fire"], "fire", rect.width)
         if tile.crime_risk >= 70:
-            pygame.draw.circle(surface, COLORS["police"], (rect.right - 7, rect.bottom - 7), 3)
+            self._draw_status_badge(surface, (rect.right - 8, rect.bottom - 8), COLORS["police"], "crime", rect.width)
 
     def _draw_hover(
         self,
@@ -433,13 +357,22 @@ class Renderer:
         rect = pygame.Rect(screen_x, screen_y, tile_px + 1, tile_px + 1)
         blocked = self._tool_blocked(city_map.get(x, y), active_tool)
         color = COLORS["hover_blocked"] if blocked else COLORS["hover_ok"]
+        pygame.draw.rect(surface, (18, 22, 24), rect.inflate(2, 2), width=2)
         pygame.draw.rect(surface, color, rect, width=3)
 
     def _tool_blocked(self, tile, active_tool: Tool) -> bool:
+        if active_tool == Tool.BULLDOZE:
+            return tile.is_empty and tile.terrain == TerrainType.GRASS
         if tile.terrain == TerrainType.WATER and active_tool not in (Tool.INSPECT, Tool.BULLDOZE):
             return True
         if active_tool in (Tool.RESIDENTIAL, Tool.COMMERCIAL, Tool.INDUSTRIAL):
-            return tile.has_road or tile.has_power_line or tile.has_water_pipe or tile.building != BuildingType.NONE
+            return (
+                tile.terrain != TerrainType.GRASS
+                or tile.has_road
+                or tile.has_power_line
+                or tile.has_water_pipe
+                or tile.building != BuildingType.NONE
+            )
         if active_tool == Tool.ROAD:
             return tile.has_road
         if active_tool == Tool.POWER_LINE:
@@ -447,12 +380,63 @@ class Renderer:
         if active_tool == Tool.WATER_PIPE:
             return tile.has_water_pipe or tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE
         if active_tool in TOOL_TO_BUILDING:
-            return not tile.is_empty
+            return tile.terrain != TerrainType.GRASS or not tile.is_empty
         return False
 
     def _draw_pedestrians(self, surface: pygame.Surface, camera: Camera, pedestrian_system: PedestrianSystem) -> None:
-        """Draw pedestrians on the map."""
         for ped in pedestrian_system.pedestrians:
             screen_x, screen_y = camera.world_to_screen(ped.x, ped.y, TILE_SIZE)
-            ped_size = max(2, int(TILE_SIZE * camera.zoom * 0.3))
-            pygame.draw.circle(surface, COLORS["pedestrian"], (screen_x, screen_y), ped_size)
+            ped_size = max(3, int(TILE_SIZE * camera.zoom * 0.22))
+            variant = abs(int(ped.x * 11 + ped.y * 7))
+            self.sprites.draw_pedestrian(surface, (screen_x, screen_y), ped_size, variant)
+
+    def _draw_grid(self, surface: pygame.Surface, rect: pygame.Rect, zoom: float, system_view: bool) -> None:
+        if zoom < 0.75 and not system_view:
+            return
+        if system_view:
+            color = COLORS["grid_light"] if zoom >= 1.15 else COLORS["grid"]
+        else:
+            color = (47, 58, 51) if zoom >= 1.15 else (42, 51, 46)
+        pygame.draw.rect(surface, color, rect, width=1)
+
+    def _draw_status_badge(
+        self,
+        surface: pygame.Surface,
+        center: tuple[int, int],
+        color: tuple[int, int, int],
+        kind: str,
+        tile_width: int,
+    ) -> None:
+        radius = max(4, tile_width // 8)
+        pygame.draw.circle(surface, (20, 23, 26), center, radius + 1)
+        pygame.draw.circle(surface, color, center, radius)
+        icon_color = (24, 28, 31)
+        if kind == "power":
+            points = [
+                (center[0] - radius // 3, center[1] - radius + 1),
+                (center[0] + 1, center[1] - 1),
+                (center[0] - 1, center[1] - 1),
+                (center[0] + radius // 3, center[1] + radius - 1),
+            ]
+            pygame.draw.lines(surface, icon_color, False, points, max(1, tile_width // 24))
+        elif kind == "water":
+            pygame.draw.circle(surface, icon_color, (center[0], center[1] + 1), max(1, radius // 3))
+            pygame.draw.polygon(surface, icon_color, [(center[0], center[1] - radius + 2), (center[0] - radius // 3, center[1]), (center[0] + radius // 3, center[1])])
+        elif kind == "fire":
+            pygame.draw.polygon(surface, icon_color, [(center[0], center[1] - radius + 2), (center[0] - radius // 2, center[1] + radius // 2), (center[0] + radius // 2, center[1] + radius // 2)])
+        elif kind == "crime":
+            pygame.draw.rect(surface, icon_color, pygame.Rect(center[0] - radius // 2, center[1] - radius // 3, radius, radius), border_radius=1)
+
+    def _same_terrain_neighbors(
+        self,
+        city_map: CityMap,
+        x: int,
+        y: int,
+        terrain: TerrainType,
+    ) -> dict[str, bool]:
+        return {
+            "north": city_map.in_bounds(x, y - 1) and city_map.get(x, y - 1).terrain == terrain,
+            "east": city_map.in_bounds(x + 1, y) and city_map.get(x + 1, y).terrain == terrain,
+            "south": city_map.in_bounds(x, y + 1) and city_map.get(x, y + 1).terrain == terrain,
+            "west": city_map.in_bounds(x - 1, y) and city_map.get(x - 1, y).terrain == terrain,
+        }

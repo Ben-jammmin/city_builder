@@ -25,10 +25,10 @@ Main files:
 
 The map has four terrain types generated during city creation:
 
-- Grass (buildable)
+- Grass (clear land for zones and buildings)
 - Water (blocks construction, must be cleared to build)
-- Forest (can be cleared for land)
-- Hills (buildable but can be flattened)
+- Forest (must be cleared for zones and buildings)
+- Hills (must be flattened for zones and buildings)
 
 **Terrain Demolition**: Use the bulldoze tool (key `9`) to demolish terrain:
 
@@ -37,7 +37,7 @@ The map has four terrain types generated during city creation:
 - **Hills**: $25 per tile
 - **Grass**: Cannot bulldoze (already clear)
 
-First, bulldoze clears any man-made structures (zones, roads, utilities, buildings). Once a tile is empty, the next bulldoze will clear the terrain to grass.
+First, bulldoze clears any man-made structures (zones, roads, utilities, buildings). Once a tile is empty, the next bulldoze will clear forest, hill, or water terrain to grass.
 
 Good next improvements:
 
@@ -72,6 +72,8 @@ The map has small `can_place_*` helper methods for placement rules:
 - `can_place_building()`
 
 The actual `place_*` methods call those helpers, then make the change if allowed. This keeps the rule check and the action easy to read.
+
+Zones and buildings require clear grass terrain. Roads, power lines, and water pipes can be built on any non-water terrain.
 
 Good next improvements:
 
@@ -119,6 +121,11 @@ Main files:
 
 Power plants are buildings. Power lines are stored with `tile.has_power_line`.
 
+There are two power source buildings:
+
+- Power plant: lower cost, lower capacity
+- Large power plant: higher cost, higher upkeep, higher capacity
+
 The helper `CityMap.power_connections(x, y)` checks whether a power line connects to neighboring power lines or power plants.
 
 The simulation builds a connected power network starting from power plants. A zone is powered if it touches that network.
@@ -151,6 +158,11 @@ Main files:
 - `citybuilder/ui.py`
 
 Water towers are buildings. Water pipes are stored with `tile.has_water_pipe`.
+
+There are two water source buildings:
+
+- Water tower: lower cost, lower capacity
+- Large water tower: higher cost, higher upkeep, higher capacity
 
 The helper `CityMap.water_connections(x, y)` checks whether a pipe connects to neighboring pipes or water towers.
 
@@ -282,6 +294,11 @@ Main file:
 
 Zones develop during the monthly simulation.
 
+Residential and commercial zones have two placement levels:
+
+- Standard zones: cheaper, normal capacity
+- Dense zones: higher placement cost, slightly slower growth, much higher resident/job capacity
+
 A zone grows only when:
 
 - it has an adjacent road
@@ -300,6 +317,8 @@ Zone outputs:
 - residential zones create residents
 - commercial zones create jobs
 - industrial zones create jobs
+- dense residential zones create more residents per developed tile
+- dense commercial zones create more jobs per developed tile
 
 Good next improvements:
 
@@ -329,12 +348,38 @@ Demand is recalculated each month using simple formulas based on:
 - taxes
 - service score
 - utility capacity
+- transport buildings
 
 Good next improvements:
 
 - Show what is helping or hurting demand.
 - Add separate demand factors for crime, fire risk, and education.
 - Add charts or history.
+
+## Transport
+
+Main files:
+
+- `citybuilder/models.py`
+- `citybuilder/simulation.py`
+- `citybuilder/renderer.py`
+- `citybuilder/ui.py`
+
+Train stations and airports are transport buildings. They are placed from the `Transport` menu and use the normal building placement rules: the tile must be empty grass.
+
+Transport currently affects citywide demand:
+
+- train stations add a moderate demand boost
+- airports add a larger demand boost
+- commercial demand gets the strongest transport bonus
+- industrial demand gets a smaller transport bonus
+- residential demand gets a small transport bonus
+
+Good next improvements:
+
+- Make transport bonuses depend on nearby roads or zones.
+- Add station coverage instead of a citywide bonus.
+- Add traffic or commuting later, after roads have more behavior.
 
 ## Economy
 
@@ -356,6 +401,7 @@ Expenses come from:
 
 - roads
 - zones
+- denser zones, weighted by their zone level
 - power lines
 - water pipes
 - service buildings
@@ -460,13 +506,20 @@ When adding a new view:
 Main file:
 
 - `citybuilder/renderer.py`
+- `citybuilder/sprites.py`
+- `citybuilder/asset_loader.py`
 
 The renderer draws the map. It should only care about visual presentation.
+
+`sprites.py` owns sprite selection. It first asks `asset_loader.py` for a matching PNG from the project `assets/` folder. If the image is missing, it falls back to generated sprite-style tile art. This lets the game look better immediately while still making it easy to drop in a real tile set later.
+
+Asset names are documented in `assets/README.md`. Road, power, and water sprites use a north/east/south/west connection mask, such as `road_1010.png` for a north-south road.
 
 It currently draws:
 
 - terrain
 - terrain base color
+- sprite-style roads, zones, buildings, and terrain details
 - roads
 - zones
 - buildings
@@ -479,8 +532,25 @@ It currently draws:
 
 Good next improvements:
 
-- Add terrain art.
+- Add a complete custom PNG tile set under `assets/`.
+- Add alternate seasonal or city-theme asset folders.
 - Add simple animations for development or warnings.
+
+## Pedestrians
+
+Main files:
+
+- `citybuilder/pedestrian.py`
+- `citybuilder/game.py`
+- `citybuilder/renderer.py`
+
+The pedestrian system spawns simple moving dots as population grows. Pedestrians pick nearby random targets and move around the map in normal view. They are visual only right now and do not affect traffic, demand, or city stats.
+
+Good next improvements:
+
+- Spawn pedestrians from residential zones instead of random map positions.
+- Prefer walking on roads.
+- Connect pedestrians to job or service destinations later.
 
 ## Terrain Generation
 
@@ -496,10 +566,10 @@ Terrain is stored on each tile as `tile.terrain`.
 
 Current terrain types:
 
-- `Grass`: normal buildable land
+- `Grass`: clear land for zones and buildings
 - `Water`: blocks zones, roads, utility lines, and buildings
-- `Forest`: buildable, but construction clears it to grass
-- `Hill`: buildable land that can later get special costs or rules
+- `Forest`: must be cleared before zones or buildings
+- `Hill`: must be flattened before zones or buildings
 
 The new city generator starts with grass, draws a simple winding river, then adds forest and hill patches.
 
@@ -509,7 +579,8 @@ The first version keeps the rules simple:
 
 - `CityMap.can_place_*` helpers own the construction rules
 - bulldozing clears city construction but keeps the terrain
-- building on forest clears that tile to grass
+- roads and utility lines can be built on non-water terrain
+- zones and buildings require clear grass terrain
 - clicking water with a build tool gives an advisor message
 - water stays visible in system views so planning is easier
 - save/load stores terrain so the map does not change when loaded

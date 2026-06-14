@@ -46,8 +46,8 @@ from .settings import (
     POPULATION_TAX_COEFFICIENT,
     POWER_CONSUMPTION_PER_JOB,
     POWER_CONSUMPTION_PER_RESIDENT,
+    POWER_CAPACITY_BY_BUILDING,
     POWER_LINE_MAINTENANCE,
-    POWER_PLANT_CAPACITY,
     RESIDENTIAL_CAPACITY,
     ROAD_MAINTENANCE,
     ROAD_NEIGHBOR_BONUS,
@@ -64,10 +64,13 @@ from .settings import (
     UTILITY_BONUS_MULTIPLIER,
     WATER_CONSUMPTION_PER_JOB,
     WATER_CONSUMPTION_PER_RESIDENT,
+    WATER_CAPACITY_BY_BUILDING,
     WATER_PIPE_MAINTENANCE,
-    WATER_TOWER_CAPACITY,
     ZONE_MAINTENANCE,
+    ZONE_LEVEL_CAPACITY_MULTIPLIERS,
+    ZONE_LEVEL_GROWTH_MULTIPLIERS,
 )
+from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS
 
 
 class Simulation:
@@ -108,7 +111,7 @@ class Simulation:
         revenue = int(population * self.stats.tax_rate * POPULATION_TAX_COEFFICIENT + jobs * self.stats.tax_rate * JOBS_TAX_COEFFICIENT)
         expenses = int(
             self.city_map.road_count() * ROAD_MAINTENANCE
-            + self.city_map.zoned_count() * ZONE_MAINTENANCE
+            + self.city_map.zone_maintenance_units() * ZONE_MAINTENANCE
             + self.city_map.power_line_count() * POWER_LINE_MAINTENANCE
             + self.city_map.water_pipe_count() * WATER_PIPE_MAINTENANCE
             + sum(
@@ -135,7 +138,12 @@ class Simulation:
             tile.land_value = self._land_value_for(x, y)
 
             if connected and tile.powered and tile.watered:
-                growth = self._growth_for(tile.zone) * tile.land_value * self._utility_capacity_factor()
+                growth = (
+                    self._growth_for(tile.zone)
+                    * self._zone_growth_multiplier(tile.zone_level)
+                    * tile.land_value
+                    * self._utility_capacity_factor()
+                )
                 tile.development = min(1.0, tile.development + growth)
             else:
                 tile.development = max(0.0, tile.development - DEVELOPMENT_DECLINE_RATE)
@@ -174,11 +182,27 @@ class Simulation:
         tile.residents = 0
         tile.jobs = 0
         if tile.zone == ZoneType.RESIDENTIAL:
-            tile.residents = int(RESIDENTIAL_CAPACITY * tile.development * tile.land_value)
+            tile.residents = int(
+                RESIDENTIAL_CAPACITY
+                * self._zone_capacity_multiplier(tile.zone_level)
+                * tile.development
+                * tile.land_value
+            )
         elif tile.zone == ZoneType.COMMERCIAL:
-            tile.jobs = int(COMMERCIAL_CAPACITY * tile.development * tile.land_value)
+            tile.jobs = int(
+                COMMERCIAL_CAPACITY
+                * self._zone_capacity_multiplier(tile.zone_level)
+                * tile.development
+                * tile.land_value
+            )
         elif tile.zone == ZoneType.INDUSTRIAL:
             tile.jobs = int(INDUSTRIAL_CAPACITY * tile.development)
+
+    def _zone_capacity_multiplier(self, level: int) -> float:
+        return ZONE_LEVEL_CAPACITY_MULTIPLIERS.get(level, 1.0)
+
+    def _zone_growth_multiplier(self, level: int) -> float:
+        return ZONE_LEVEL_GROWTH_MULTIPLIERS.get(level, 1.0)
 
     def _fire_risk_for(self, x: int, y: int) -> int:
         tile = self.city_map.get(x, y)
@@ -239,8 +263,8 @@ class Simulation:
         return self._clamp_percent(risk)
 
     def _update_systems(self) -> None:
-        power_network = self._connected_network(BuildingType.POWER_PLANT, "has_power_line")
-        water_network = self._connected_network(BuildingType.WATER_TOWER, "has_water_pipe")
+        power_network = self._connected_network(POWER_SOURCE_BUILDINGS, "has_power_line")
+        water_network = self._connected_network(WATER_SOURCE_BUILDINGS, "has_water_pipe")
         service_tiles = self._service_tiles()
 
         for x, y, tile in self.city_map.iter_tiles():
@@ -263,11 +287,11 @@ class Simulation:
             if tile.zone != ZoneType.EMPTY and not tile.watered
         )
 
-    def _connected_network(self, source_building: BuildingType, line_attr: str) -> set[tuple[int, int]]:
+    def _connected_network(self, source_buildings: set[BuildingType], line_attr: str) -> set[tuple[int, int]]:
         starts = [
             (x, y)
             for x, y, tile in self.city_map.iter_tiles()
-            if tile.building == source_building
+            if tile.building in source_buildings
         ]
         network = set(starts)
         frontier = list(starts)
@@ -277,7 +301,7 @@ class Simulation:
             for nx, ny, neighbor in self.city_map.neighbors4(x, y):
                 if (nx, ny) in network:
                     continue
-                if getattr(neighbor, line_attr) or neighbor.building == source_building:
+                if getattr(neighbor, line_attr) or neighbor.building in source_buildings:
                     network.add((nx, ny))
                     frontier.append((nx, ny))
 
@@ -347,8 +371,8 @@ class Simulation:
         )
 
     def _update_system_totals(self) -> None:
-        self.stats.power_capacity = self.city_map.building_count(BuildingType.POWER_PLANT) * POWER_PLANT_CAPACITY
-        self.stats.water_capacity = self.city_map.building_count(BuildingType.WATER_TOWER) * WATER_TOWER_CAPACITY
+        self.stats.power_capacity = self._capacity_from_buildings(POWER_CAPACITY_BY_BUILDING)
+        self.stats.water_capacity = self._capacity_from_buildings(WATER_CAPACITY_BY_BUILDING)
         self.stats.power_usage = int(self.stats.population * POWER_CONSUMPTION_PER_RESIDENT + self.stats.jobs * POWER_CONSUMPTION_PER_JOB)
         self.stats.water_usage = int(self.stats.population * WATER_CONSUMPTION_PER_RESIDENT + self.stats.jobs * WATER_CONSUMPTION_PER_JOB)
         self.stats.power_satisfaction = self._supply_percent(self.stats.power_capacity, self.stats.power_usage)
@@ -378,6 +402,12 @@ class Simulation:
         power_factor = self._capacity_factor(self.stats.power_capacity, self.stats.power_usage)
         water_factor = self._capacity_factor(self.stats.water_capacity, self.stats.water_usage)
         return min(power_factor, water_factor)
+
+    def _capacity_from_buildings(self, capacity_by_building: dict[str, int]) -> int:
+        return sum(
+            capacity_by_building.get(tile.building.value, 0)
+            for _, _, tile in self.city_map.iter_tiles()
+        )
 
     def _capacity_factor(self, capacity: int, usage: int) -> float:
         if usage <= 0:
@@ -441,6 +471,4 @@ class Simulation:
             self.stats.add_message("Businesses are hiring.")
         elif revenue < expenses and self.city_map.road_count() > 0:
             self.stats.add_message("Maintenance is higher than revenue.")
-
-
 

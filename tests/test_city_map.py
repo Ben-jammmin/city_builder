@@ -17,11 +17,20 @@ class CityMapTests(unittest.TestCase):
     def test_place_zone_changes_empty_tile(self) -> None:
         city_map = CityMap(3, 3)
 
-        placed = city_map.place_zone(1, 1, ZoneType.RESIDENTIAL)
+        placed = city_map.place_zone(1, 1, ZoneType.RESIDENTIAL, level=2)
 
         self.assertTrue(placed)
         self.assertEqual(city_map.get(1, 1).zone, ZoneType.RESIDENTIAL)
+        self.assertEqual(city_map.get(1, 1).zone_level, 2)
         self.assertEqual(city_map.zoned_count(), 1)
+
+    def test_place_zone_allows_upgrading_same_zone_to_new_level(self) -> None:
+        city_map = CityMap(3, 3)
+        city_map.place_zone(1, 1, ZoneType.RESIDENTIAL)
+
+        self.assertTrue(city_map.place_zone(1, 1, ZoneType.RESIDENTIAL, level=2))
+        self.assertEqual(city_map.get(1, 1).zone_level, 2)
+        self.assertFalse(city_map.place_zone(1, 1, ZoneType.RESIDENTIAL, level=2))
 
     def test_place_zone_rejects_out_of_bounds_road_and_same_zone(self) -> None:
         city_map = CityMap(3, 3)
@@ -205,6 +214,13 @@ class CityMapTests(unittest.TestCase):
             {"north": True, "east": True, "south": False, "west": False},
         )
 
+    def test_large_power_plants_connect_to_power_lines(self) -> None:
+        city_map = CityMap(4, 4)
+        city_map.place_building(1, 0, BuildingType.LARGE_POWER_PLANT)
+        city_map.place_power_line(1, 1)
+
+        self.assertTrue(city_map.power_connections(1, 1)["north"])
+
     def test_power_connections_ignore_roads_zones_and_empty_tiles(self) -> None:
         city_map = CityMap(3, 3)
         city_map.place_power_line(1, 1)
@@ -226,6 +242,13 @@ class CityMapTests(unittest.TestCase):
             city_map.water_connections(1, 1),
             {"north": True, "east": True, "south": False, "west": False},
         )
+
+    def test_large_water_towers_connect_to_water_pipes(self) -> None:
+        city_map = CityMap(4, 4)
+        city_map.place_building(1, 0, BuildingType.LARGE_WATER_TOWER)
+        city_map.place_water_pipe(1, 1)
+
+        self.assertTrue(city_map.water_connections(1, 1)["north"])
 
     def test_water_connections_ignore_roads_zones_and_empty_tiles(self) -> None:
         city_map = CityMap(3, 3)

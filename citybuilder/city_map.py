@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from .models import BuildingType, TerrainType, Tile, ZoneType
+from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS, BuildingType, TerrainType, Tile, ZoneType
 
 
 class CityMap:
@@ -52,13 +52,13 @@ class CityMap:
     def is_water(self, x: int, y: int) -> bool:
         return self.in_bounds(x, y) and self.get(x, y).terrain == TerrainType.WATER
 
-    def can_place_zone(self, x: int, y: int, zone: ZoneType) -> bool:
+    def can_place_zone(self, x: int, y: int, zone: ZoneType, level: int = 1) -> bool:
         if not self.is_clear_land(x, y):
             return False
         tile = self.get(x, y)
         if tile.has_road or tile.has_power_line or tile.has_water_pipe or tile.building != BuildingType.NONE:
             return False
-        return tile.zone != zone
+        return tile.zone != zone or tile.zone_level != level
 
     def can_place_road(self, x: int, y: int) -> bool:
         if not self.is_buildable_land(x, y):
@@ -109,7 +109,7 @@ class CityMap:
         if not self.in_bounds(x, y):
             return False
         tile = self.get(x, y)
-        return tile.has_power_line or tile.building == BuildingType.POWER_PLANT
+        return tile.has_power_line or tile.building in POWER_SOURCE_BUILDINGS
 
     def water_connections(self, x: int, y: int) -> dict[str, bool]:
         if not self._is_water_connector_at(x, y):
@@ -125,14 +125,15 @@ class CityMap:
         if not self.in_bounds(x, y):
             return False
         tile = self.get(x, y)
-        return tile.has_water_pipe or tile.building == BuildingType.WATER_TOWER
+        return tile.has_water_pipe or tile.building in WATER_SOURCE_BUILDINGS
 
-    def place_zone(self, x: int, y: int, zone: ZoneType) -> bool:
-        if not self.can_place_zone(x, y, zone):
+    def place_zone(self, x: int, y: int, zone: ZoneType, level: int = 1) -> bool:
+        if not self.can_place_zone(x, y, zone, level):
             return False
         tile = self.get(x, y)
         self._clear_natural_cover(tile)
         tile.zone = zone
+        tile.zone_level = level
         tile.development = 0.0
         tile.residents = 0
         tile.jobs = 0
@@ -200,6 +201,9 @@ class CityMap:
 
     def zoned_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.zone != ZoneType.EMPTY)
+
+    def zone_maintenance_units(self) -> int:
+        return sum(tile.zone_level for _, _, tile in self.iter_tiles() if tile.zone != ZoneType.EMPTY)
 
     def power_line_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.has_power_line)
