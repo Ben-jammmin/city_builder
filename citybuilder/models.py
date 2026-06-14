@@ -20,6 +20,13 @@ class ZoneType(Enum):
     INDUSTRIAL = "industrial"
 
 
+class TerrainType(Enum):
+    GRASS = "grass"
+    WATER = "water"
+    FOREST = "forest"
+    HILL = "hill"
+
+
 class BuildingType(Enum):
     NONE = "none"
     POWER_PLANT = "power_plant"
@@ -27,6 +34,8 @@ class BuildingType(Enum):
     POLICE = "police"
     FIRE = "fire"
     SCHOOL = "school"
+    TRAIN_STATION = "train_station"
+    AIRPORT = "airport"
 
 
 class Tool(Enum):
@@ -42,7 +51,18 @@ class Tool(Enum):
     POLICE = "police"
     FIRE = "fire"
     SCHOOL = "school"
+    TRAIN_STATION = "train_station"
+    AIRPORT = "airport"
     BULLDOZE = "bulldoze"
+
+
+class ViewMode(Enum):
+    NORMAL = "normal"
+    POWER = "power"
+    WATER = "water"
+    FIRE = "fire"
+    POLICE = "police"
+    TERRAIN = "terrain"
 
 
 ZONE_LABELS = {
@@ -52,6 +72,32 @@ ZONE_LABELS = {
     ZoneType.INDUSTRIAL: "Industrial",
 }
 
+TERRAIN_LABELS = {
+    TerrainType.GRASS: "Grass",
+    TerrainType.WATER: "Water",
+    TerrainType.FOREST: "Forest",
+    TerrainType.HILL: "Hill",
+}
+
+VIEW_LABELS = {
+    ViewMode.NORMAL: "Normal",
+    ViewMode.POWER: "Power",
+    ViewMode.WATER: "Water",
+    ViewMode.FIRE: "Fire",
+    ViewMode.POLICE: "Police",
+    ViewMode.TERRAIN: "Terrain",
+}
+
+VIEW_ORDER = [
+    ViewMode.NORMAL,
+    ViewMode.POWER,
+    ViewMode.WATER,
+    ViewMode.FIRE,
+    ViewMode.POLICE,
+    ViewMode.TERRAIN,
+]
+
+
 BUILDING_LABELS = {
     BuildingType.NONE: "None",
     BuildingType.POWER_PLANT: "Power Plant",
@@ -59,6 +105,8 @@ BUILDING_LABELS = {
     BuildingType.POLICE: "Police",
     BuildingType.FIRE: "Fire",
     BuildingType.SCHOOL: "School",
+    BuildingType.TRAIN_STATION: "Train Station",
+    BuildingType.AIRPORT: "Airport",
 }
 
 TOOL_LABELS = {
@@ -74,6 +122,8 @@ TOOL_LABELS = {
     Tool.POLICE: "Police",
     Tool.FIRE: "Fire",
     Tool.SCHOOL: "School",
+    Tool.TRAIN_STATION: "Train Station",
+    Tool.AIRPORT: "Airport",
     Tool.BULLDOZE: "Bulldoze",
 }
 
@@ -91,6 +141,8 @@ TOOL_HOTKEYS = {
     "p": Tool.POLICE,
     "f": Tool.FIRE,
     "h": Tool.SCHOOL,
+    "t": Tool.TRAIN_STATION,
+    "a": Tool.AIRPORT,
 }
 
 MENU_TOOLS = {
@@ -114,6 +166,10 @@ MENU_TOOLS = {
         Tool.SCHOOL,
         Tool.BULLDOZE,
     ],
+    "Transport": [
+        Tool.TRAIN_STATION,
+        Tool.AIRPORT,
+    ],
 }
 
 MENU_ORDER = list(MENU_TOOLS.keys())
@@ -125,6 +181,8 @@ TOOL_TO_BUILDING = {
     Tool.POLICE: BuildingType.POLICE,
     Tool.FIRE: BuildingType.FIRE,
     Tool.SCHOOL: BuildingType.SCHOOL,
+    Tool.TRAIN_STATION: BuildingType.TRAIN_STATION,
+    Tool.AIRPORT: BuildingType.AIRPORT,
 }
 
 
@@ -137,6 +195,7 @@ def menu_for_tool(tool: Tool) -> str:
 
 @dataclass
 class Tile:
+    terrain: TerrainType = TerrainType.GRASS
     zone: ZoneType = ZoneType.EMPTY
     building: BuildingType = BuildingType.NONE
     has_road: bool = False
@@ -151,6 +210,8 @@ class Tile:
     police_coverage: bool = False
     fire_coverage: bool = False
     education_coverage: bool = False
+    fire_risk: int = 0
+    crime_risk: int = 0
 
     @property
     def is_empty(self) -> bool:
@@ -177,6 +238,8 @@ class Tile:
         self.police_coverage = False
         self.fire_coverage = False
         self.education_coverage = False
+        self.fire_risk = 0
+        self.crime_risk = 0
 
 
 @dataclass
@@ -197,9 +260,19 @@ class CityStats:
     demand_industrial: int = 50
     power_capacity: int = 0
     power_usage: int = 0
+    power_satisfaction: int = 0
+    unpowered_zones: int = 0
     water_capacity: int = 0
     water_usage: int = 0
+    water_satisfaction: int = 0
+    unwatered_zones: int = 0
     service_score: int = 0
+    fire_coverage_percent: int = 0
+    fire_uncovered_zones: int = 0
+    average_fire_risk: int = 0
+    police_coverage_percent: int = 0
+    police_uncovered_zones: int = 0
+    average_crime_risk: int = 0
     powered_tiles: int = 0
     watered_tiles: int = 0
     messages: list[str] = field(default_factory=lambda: ["Game starts paused. Press Space or Run."])

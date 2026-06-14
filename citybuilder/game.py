@@ -10,11 +10,16 @@ from .models import (
     TOOL_HOTKEYS,
     TOOL_LABELS,
     TOOL_TO_BUILDING,
+    VIEW_LABELS,
+    VIEW_ORDER,
     CityStats,
+    TerrainType,
     Tool,
+    ViewMode,
     ZoneType,
     menu_for_tool,
 )
+from .pedestrian import PedestrianSystem
 from .renderer import Renderer
 from .save_load import load_game, save_game
 from .settings import (
@@ -24,11 +29,14 @@ from .settings import (
     FPS,
     MAP_HEIGHT,
     MAP_WIDTH,
+    PEDESTRIAN_MAX_COUNT,
+    PEDESTRIAN_SPAWN_RATE,
     POWER_LINE_COST,
     ROAD_COST,
     SAVE_FILE,
     SIDEBAR_WIDTH,
     SIM_SECONDS_PER_MONTH,
+    TERRAIN_CLEAR_COSTS,
     TILE_SIZE,
     WATER_PIPE_COST,
     WINDOW_HEIGHT,
@@ -36,6 +44,7 @@ from .settings import (
     ZONE_COST,
 )
 from .simulation import Simulation
+from .terrain import generate_terrain
 from .ui import Sidebar
 
 
@@ -50,8 +59,10 @@ class Game:
         self.running = True
 
         self.map = CityMap(MAP_WIDTH, MAP_HEIGHT)
+        generate_terrain(self.map)
         self.stats = CityStats()
         self.simulation = Simulation(self.map, self.stats)
+        self.pedestrian_system = PedestrianSystem(max_count=PEDESTRIAN_MAX_COUNT)
         viewport = pygame.Rect(0, 0, self.windowed_size[0] - SIDEBAR_WIDTH, self.windowed_size[1])
         self.camera = Camera(MAP_WIDTH * TILE_SIZE, MAP_HEIGHT * TILE_SIZE, viewport)
         self.renderer = Renderer()
@@ -60,6 +71,7 @@ class Game:
 
         self.active_tool = Tool.RESIDENTIAL
         self.active_menu = menu_for_tool(self.active_tool)
+        self.view_mode = ViewMode.NORMAL
         self.save_path = Path(__file__).resolve().parent.parent / SAVE_FILE
         self.hover_tile: tuple[int, int] | None = None
         self.painting = False
@@ -73,6 +85,7 @@ class Game:
             self._handle_events()
             self._handle_keyboard_camera(dt)
             self.simulation.update(dt, SIM_SECONDS_PER_MONTH)
+            self.pedestrian_system.update(dt, MAP_WIDTH, MAP_HEIGHT, self.stats.population, PEDESTRIAN_SPAWN_RATE)
             self._draw()
         pygame.quit()
 
@@ -102,6 +115,9 @@ class Game:
             self._toggle_fullscreen()
         elif event.key == pygame.K_SPACE:
             self.stats.paused = not self.stats.paused
+        elif event.key == pygame.K_v:
+            direction = -1 if event.mod & pygame.KMOD_SHIFT else 1
+            self._cycle_view_mode(direction)
         elif event.key in (pygame.K_EQUALS, pygame.K_PLUS):
             self.stats.change_tax_rate(1)
         elif event.key in (pygame.K_MINUS, pygame.K_UNDERSCORE):
@@ -115,6 +131,11 @@ class Game:
             self._save_game()
         elif event.key == pygame.K_F9:
             self._load_game()
+
+    def _cycle_view_mode(self, direction: int = 1) -> None:
+        current_index = VIEW_ORDER.index(self.view_mode)
+        self.view_mode = VIEW_ORDER[(current_index + direction) % len(VIEW_ORDER)]
+        self.stats.add_message(f"{VIEW_LABELS[self.view_mode]} view.")
 
     def _toggle_fullscreen(self) -> None:
         if self.fullscreen:
@@ -271,6 +292,24 @@ class Game:
         if self.map.place_zone(*tile_pos, zone):
             self.stats.money -= cost
             self.stats.add_message(f"Zoned {zone.value} for ${cost}.")
+        else:
+            self._add_zone_blocked_message(tile_pos, zone)
+
+    def _add_zone_blocked_message(self, tile_pos: tuple[int, int], zone: ZoneType) -> None:
+        x, y = tile_pos
+        tile = self.map.get(x, y)
+        if tile.terrain != TerrainType.GRASS:
+            self.stats.add_message("Terrain not clear - bulldoze first.")
+        elif not self.map.is_buildable_land(x, y):
+            self.stats.add_message("Cannot build on water.")
+        elif tile.zone == zone:
+            self.stats.add_message("Zone already exists here.")
+        elif tile.building != BuildingType.NONE or tile.has_road or tile.has_power_line or tile.has_water_pipe:
+            self.stats.add_message("Tile already occupied.")
+        elif not self.map.has_adjacent_road(x, y):
+            self.stats.add_message("Zone needs adjacent road.")
+        else:
+            self.stats.add_message("Cannot place zone.")
 
     def _place_road(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(ROAD_COST):
@@ -278,6 +317,14 @@ class Game:
         if self.map.place_road(*tile_pos):
             self.stats.money -= ROAD_COST
             self.stats.add_message(f"Built road for ${ROAD_COST}.")
+        else:
+            x, y = tile_pos
+            if self.map.is_water(x, y):
+                self.stats.add_message("Cannot build road on water.")
+            elif self.map.get(x, y).has_road:
+                self.stats.add_message("Road already exists.")
+            else:
+                self.stats.add_message("Cannot place road.")
 
     def _place_power_line(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(POWER_LINE_COST):
@@ -285,6 +332,16 @@ class Game:
         if self.map.place_power_line(*tile_pos):
             self.stats.money -= POWER_LINE_COST
             self.stats.add_message(f"Built power line for ${POWER_LINE_COST}.")
+        else:
+            x, y = tile_pos
+            if self.map.is_water(x, y):
+                self.stats.add_message("Cannot build on water.")
+            elif self.map.get(x, y).has_power_line:
+                self.stats.add_message("Power line already exists.")
+            elif self.map.get(x, y).zone != ZoneType.EMPTY or self.map.get(x, y).building != BuildingType.NONE:
+                self.stats.add_message("Tile occupied by zone/building.")
+            else:
+                self.stats.add_message("Cannot place power line.")
 
     def _place_water_pipe(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(WATER_PIPE_COST):
@@ -292,6 +349,16 @@ class Game:
         if self.map.place_water_pipe(*tile_pos):
             self.stats.money -= WATER_PIPE_COST
             self.stats.add_message(f"Built water pipe for ${WATER_PIPE_COST}.")
+        else:
+            x, y = tile_pos
+            if self.map.is_water(x, y):
+                self.stats.add_message("Cannot build on water.")
+            elif self.map.get(x, y).has_water_pipe:
+                self.stats.add_message("Water pipe already exists.")
+            elif self.map.get(x, y).zone != ZoneType.EMPTY or self.map.get(x, y).building != BuildingType.NONE:
+                self.stats.add_message("Tile occupied by zone/building.")
+            else:
+                self.stats.add_message("Cannot place water pipe.")
 
     def _place_building(self, tile_pos: tuple[int, int]) -> None:
         building = TOOL_TO_BUILDING[self.active_tool]
@@ -301,13 +368,43 @@ class Game:
         if self.map.place_building(*tile_pos, building):
             self.stats.money -= cost
             self.stats.add_message(f"Built {TOOL_LABELS[self.active_tool]} for ${cost}.")
+        else:
+            x, y = tile_pos
+            tile = self.map.get(x, y)
+            if tile.terrain != TerrainType.GRASS:
+                self.stats.add_message("Terrain not clear - bulldoze first.")
+            elif not self.map.is_buildable_land(x, y):
+                self.stats.add_message("Cannot build on water.")
+            elif not tile.is_empty:
+                self.stats.add_message("Tile already occupied.")
+            else:
+                self.stats.add_message("Cannot place building.")
 
     def _bulldoze(self, tile_pos: tuple[int, int]) -> None:
-        if not self._can_afford(BULLDOZE_COST):
+        x, y = tile_pos
+        tile = self.map.get(x, y)
+        
+        # Determine cost based on what's being bulldozed
+        cost = BULLDOZE_COST
+        item_name = "tile"
+        
+        # Check if we're clearing terrain
+        if tile.is_empty and tile.terrain != TerrainType.GRASS:
+            if tile.terrain == TerrainType.WATER:
+                cost = TERRAIN_CLEAR_COSTS["water"]
+                item_name = "water"
+            elif tile.terrain == TerrainType.FOREST:
+                cost = TERRAIN_CLEAR_COSTS["forest"]
+                item_name = "forest"
+            elif tile.terrain == TerrainType.HILL:
+                cost = TERRAIN_CLEAR_COSTS["hill"]
+                item_name = "hill"
+        
+        if not self._can_afford(cost):
             return
         if self.map.bulldoze(*tile_pos):
-            self.stats.money -= BULLDOZE_COST
-            self.stats.add_message(f"Bulldozed tile for ${BULLDOZE_COST}.")
+            self.stats.money -= cost
+            self.stats.add_message(f"Cleared {item_name} for ${cost}.")
 
     def _save_game(self) -> None:
         save_game(self.map, self.stats, self.save_path)
@@ -337,13 +434,22 @@ class Game:
 
     def _draw(self) -> None:
         self.screen.fill(COLORS["background"])
-        self.renderer.draw_map(self.screen, self.map, self.camera, self.active_tool, self.hover_tile)
+        self.renderer.draw_map(
+            self.screen,
+            self.map,
+            self.camera,
+            self.active_tool,
+            self.view_mode,
+            self.hover_tile,
+            self.pedestrian_system,
+        )
         self.sidebar.draw(
             self.screen,
             self.stats,
             self.map,
             self.active_tool,
             self.active_menu,
+            self.view_mode,
             self.fullscreen,
             self.hover_tile,
         )
@@ -353,8 +459,8 @@ class Game:
     def _draw_top_hint(self) -> None:
         font = pygame.font.SysFont("Segoe UI", 15)
         text = (
-            f"{TOOL_LABELS[self.active_tool]} tool | WASD/Arrows pan | Wheel zoom | "
-            "Left paint | Right bulldoze | F11/Alt+Enter fullscreen | F5 save | F9 load"
+            f"{TOOL_LABELS[self.active_tool]} tool | {VIEW_LABELS[self.view_mode]} view | "
+            "V cycle view | WASD pan | Wheel zoom | F5 save | F9 load"
         )
         rendered = font.render(text, True, COLORS["text"])
         bg = pygame.Rect(12, 12, rendered.get_width() + 18, rendered.get_height() + 10)

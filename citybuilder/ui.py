@@ -7,10 +7,13 @@ from .models import (
     BUILDING_LABELS,
     MENU_ORDER,
     MENU_TOOLS,
+    TERRAIN_LABELS,
     TOOL_HOTKEYS,
     TOOL_LABELS,
+    VIEW_LABELS,
     BuildingType,
     Tool,
+    ViewMode,
     ZoneType,
 )
 from .settings import COLORS, MAX_TAX_RATE, MIN_TAX_RATE, SIDEBAR_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH
@@ -42,6 +45,7 @@ class Sidebar:
         city_map: CityMap,
         active_tool: Tool,
         active_menu: str,
+        view_mode: ViewMode,
         fullscreen: bool,
         hover_tile,
     ) -> None:
@@ -54,6 +58,8 @@ class Sidebar:
         width = SIDEBAR_WIDTH - 32
 
         self._draw_text(surface, "City Builder", x, y, self.font_large)
+        view_text = self.font_small.render(f"{VIEW_LABELS[view_mode]} view", True, COLORS["muted_text"])
+        surface.blit(view_text, (self.rect.right - 16 - view_text.get_width(), y + 5))
         y += 34
         y = self._draw_city_stats(surface, stats, x, y)
         y = self._draw_menu_tabs(surface, x, y + 6, width, active_menu)
@@ -135,25 +141,54 @@ class Sidebar:
         return panel.bottom
 
     def _draw_system_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
-        panel = self._panel(surface, x, y, width, 82)
+        panel = self._panel(surface, x, y, width, 156)
         self._draw_text(surface, "Systems", panel.x + 10, panel.y + 8, self.font)
         self._draw_text(
             surface,
-            f"Power {stats.power_usage}/{stats.power_capacity}",
+            f"Power {stats.power_usage}/{stats.power_capacity}  {stats.power_satisfaction}%",
             panel.x + 10,
             panel.y + 34,
             self.font_mono,
-            self._capacity_color(stats.power_usage, stats.power_capacity),
+            self._power_color(stats),
         )
         self._draw_text(
             surface,
-            f"Water {stats.water_usage}/{stats.water_capacity}",
-            panel.x + 150,
-            panel.y + 34,
+            f"Water {stats.water_usage}/{stats.water_capacity}  {stats.water_satisfaction}%",
+            panel.x + 10,
+            panel.y + 54,
             self.font_mono,
-            self._capacity_color(stats.water_usage, stats.water_capacity),
+            self._water_color(stats),
         )
-        self._bar(surface, "Svc", stats.service_score, COLORS["service"], panel.x + 10, panel.y + 58, width - 20)
+        fire_color = COLORS["money_good"] if stats.fire_uncovered_zones == 0 and stats.average_fire_risk < 70 else COLORS["money_bad"]
+        self._draw_text(
+            surface,
+            f"Fire {stats.fire_coverage_percent}%  Risk {stats.average_fire_risk}%",
+            panel.x + 10,
+            panel.y + 74,
+            self.font_mono,
+            fire_color,
+        )
+        police_color = COLORS["money_good"] if stats.police_uncovered_zones == 0 and stats.average_crime_risk < 70 else COLORS["money_bad"]
+        self._draw_text(
+            surface,
+            f"Police {stats.police_coverage_percent}%  Crime {stats.average_crime_risk}%",
+            panel.x + 10,
+            panel.y + 94,
+            self.font_mono,
+            police_color,
+        )
+        issue_text = "All zoned tiles connected"
+        issue_color = COLORS["muted_text"]
+        if stats.unpowered_zones or stats.unwatered_zones or stats.fire_uncovered_zones or stats.police_uncovered_zones:
+            issue_text = (
+                f"No P:{stats.unpowered_zones}  "
+                f"No W:{stats.unwatered_zones}  "
+                f"No F:{stats.fire_uncovered_zones}  "
+                f"No Po:{stats.police_uncovered_zones}"
+            )
+            issue_color = COLORS["money_bad"]
+        self._draw_text(surface, issue_text, panel.x + 10, panel.y + 114, self.font_small, issue_color)
+        self._bar(surface, "Svc", stats.service_score, COLORS["service"], panel.x + 10, panel.y + 136, width - 20)
         return panel.bottom
 
     def _draw_tool_buttons(
@@ -183,7 +218,7 @@ class Sidebar:
         return panel.bottom
 
     def _draw_hover_panel(self, surface: pygame.Surface, city_map: CityMap, hover_tile, x: int, y: int, width: int) -> int:
-        panel = self._panel(surface, x, y, width, 116)
+        panel = self._panel(surface, x, y, width, 134)
         self._draw_text(surface, "Tile", panel.x + 10, panel.y + 8, self.font)
         if hover_tile is None:
             self._draw_text(surface, "Move over the map", panel.x + 10, panel.y + 38, self.font_small, COLORS["muted_text"])
@@ -192,12 +227,19 @@ class Sidebar:
         tx, ty = hover_tile
         tile = city_map.get(tx, ty)
         self._draw_text(surface, f"{tx}, {ty}  {self._tile_kind(tile)}", panel.x + 10, panel.y + 34, self.font_small)
-        self._draw_text(surface, f"Dev {tile.development:.0%}  Value {tile.land_value:.2f}", panel.x + 10, panel.y + 54, self.font_small)
-        self._draw_text(surface, f"Residents {tile.residents}  Jobs {tile.jobs}", panel.x + 10, panel.y + 74, self.font_small)
+        self._draw_text(surface, f"Terrain {TERRAIN_LABELS[tile.terrain]}", panel.x + 10, panel.y + 54, self.font_small)
+        self._draw_text(surface, f"Dev {tile.development:.0%}  Value {tile.land_value:.2f}", panel.x + 10, panel.y + 74, self.font_small)
+        self._draw_text(surface, f"Residents {tile.residents}  Jobs {tile.jobs}", panel.x + 10, panel.y + 94, self.font_small)
         power = "Pwr" if tile.powered else "No Pwr"
         water = "Water" if tile.watered else "No Water"
         services = int(tile.police_coverage) + int(tile.fire_coverage) + int(tile.education_coverage)
-        self._draw_text(surface, f"{power}  {water}  Services {services}/3", panel.x + 10, panel.y + 94, self.font_small)
+        self._draw_text(
+            surface,
+            f"{power} {water} Fire {tile.fire_risk}% Crime {tile.crime_risk}%",
+            panel.x + 10,
+            panel.y + 114,
+            self.font_small,
+        )
         return panel.bottom
 
     def _draw_messages(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> None:
@@ -226,6 +268,20 @@ class Sidebar:
         if capacity <= 0:
             return COLORS["money_bad"]
         if usage > capacity:
+            return COLORS["money_bad"]
+        return COLORS["money_good"]
+
+    def _power_color(self, stats) -> tuple[int, int, int]:
+        if stats.power_capacity <= 0 or stats.unpowered_zones > 0:
+            return COLORS["money_bad"]
+        if stats.power_usage > stats.power_capacity:
+            return COLORS["money_bad"]
+        return COLORS["money_good"]
+
+    def _water_color(self, stats) -> tuple[int, int, int]:
+        if stats.water_capacity <= 0 or stats.unwatered_zones > 0:
+            return COLORS["money_bad"]
+        if stats.water_usage > stats.water_capacity:
             return COLORS["money_bad"]
         return COLORS["money_good"]
 

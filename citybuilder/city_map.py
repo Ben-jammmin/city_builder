@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from .models import BuildingType, Tile, ZoneType
+from .models import BuildingType, TerrainType, Tile, ZoneType
 
 
 class CityMap:
@@ -42,14 +42,96 @@ class CityMap:
     def has_adjacent_road(self, x: int, y: int) -> bool:
         return any(tile.has_road for _, _, tile in self.neighbors4(x, y))
 
-    def place_zone(self, x: int, y: int, zone: ZoneType) -> bool:
-        if not self.in_bounds(x, y):
+    def is_buildable_land(self, x: int, y: int) -> bool:
+        return self.in_bounds(x, y) and self.get(x, y).terrain != TerrainType.WATER
+
+    def is_clear_land(self, x: int, y: int) -> bool:
+        """Land is clear for zones/buildings only if it's grass terrain."""
+        return self.in_bounds(x, y) and self.get(x, y).terrain == TerrainType.GRASS
+
+    def is_water(self, x: int, y: int) -> bool:
+        return self.in_bounds(x, y) and self.get(x, y).terrain == TerrainType.WATER
+
+    def can_place_zone(self, x: int, y: int, zone: ZoneType) -> bool:
+        if not self.is_clear_land(x, y):
             return False
         tile = self.get(x, y)
         if tile.has_road or tile.has_power_line or tile.has_water_pipe or tile.building != BuildingType.NONE:
             return False
-        if tile.zone == zone:
+        return tile.zone != zone
+
+    def can_place_road(self, x: int, y: int) -> bool:
+        if not self.is_buildable_land(x, y):
             return False
+        return not self.get(x, y).has_road
+
+    def can_place_power_line(self, x: int, y: int) -> bool:
+        if not self.is_buildable_land(x, y):
+            return False
+        tile = self.get(x, y)
+        return tile.zone == ZoneType.EMPTY and tile.building == BuildingType.NONE and not tile.has_power_line
+
+    def can_place_water_pipe(self, x: int, y: int) -> bool:
+        if not self.is_buildable_land(x, y):
+            return False
+        tile = self.get(x, y)
+        return tile.zone == ZoneType.EMPTY and tile.building == BuildingType.NONE and not tile.has_water_pipe
+
+    def can_place_building(self, x: int, y: int, building: BuildingType) -> bool:
+        if building == BuildingType.NONE or not self.is_clear_land(x, y):
+            return False
+        return self.get(x, y).is_empty
+
+    def road_connections(self, x: int, y: int) -> dict[str, bool]:
+        if not self.in_bounds(x, y) or not self.get(x, y).has_road:
+            return {"north": False, "east": False, "south": False, "west": False}
+        return {
+            "north": self._has_road_at(x, y - 1),
+            "east": self._has_road_at(x + 1, y),
+            "south": self._has_road_at(x, y + 1),
+            "west": self._has_road_at(x - 1, y),
+        }
+
+    def _has_road_at(self, x: int, y: int) -> bool:
+        return self.in_bounds(x, y) and self.get(x, y).has_road
+
+    def power_connections(self, x: int, y: int) -> dict[str, bool]:
+        if not self._is_power_connector_at(x, y):
+            return {"north": False, "east": False, "south": False, "west": False}
+        return {
+            "north": self._is_power_connector_at(x, y - 1),
+            "east": self._is_power_connector_at(x + 1, y),
+            "south": self._is_power_connector_at(x, y + 1),
+            "west": self._is_power_connector_at(x - 1, y),
+        }
+
+    def _is_power_connector_at(self, x: int, y: int) -> bool:
+        if not self.in_bounds(x, y):
+            return False
+        tile = self.get(x, y)
+        return tile.has_power_line or tile.building == BuildingType.POWER_PLANT
+
+    def water_connections(self, x: int, y: int) -> dict[str, bool]:
+        if not self._is_water_connector_at(x, y):
+            return {"north": False, "east": False, "south": False, "west": False}
+        return {
+            "north": self._is_water_connector_at(x, y - 1),
+            "east": self._is_water_connector_at(x + 1, y),
+            "south": self._is_water_connector_at(x, y + 1),
+            "west": self._is_water_connector_at(x - 1, y),
+        }
+
+    def _is_water_connector_at(self, x: int, y: int) -> bool:
+        if not self.in_bounds(x, y):
+            return False
+        tile = self.get(x, y)
+        return tile.has_water_pipe or tile.building == BuildingType.WATER_TOWER
+
+    def place_zone(self, x: int, y: int, zone: ZoneType) -> bool:
+        if not self.can_place_zone(x, y, zone):
+            return False
+        tile = self.get(x, y)
+        self._clear_natural_cover(tile)
         tile.zone = zone
         tile.development = 0.0
         tile.residents = 0
@@ -57,11 +139,10 @@ class CityMap:
         return True
 
     def place_road(self, x: int, y: int) -> bool:
-        if not self.in_bounds(x, y):
+        if not self.can_place_road(x, y):
             return False
         tile = self.get(x, y)
-        if tile.has_road:
-            return False
+        self._clear_natural_cover(tile)
         tile.zone = ZoneType.EMPTY
         tile.building = BuildingType.NONE
         tile.development = 0.0
@@ -72,40 +153,47 @@ class CityMap:
         return True
 
     def place_power_line(self, x: int, y: int) -> bool:
-        if not self.in_bounds(x, y):
+        if not self.can_place_power_line(x, y):
             return False
         tile = self.get(x, y)
-        if tile.has_power_line or tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE:
-            return False
+        self._clear_natural_cover(tile)
         tile.has_power_line = True
         return True
 
     def place_water_pipe(self, x: int, y: int) -> bool:
-        if not self.in_bounds(x, y):
+        if not self.can_place_water_pipe(x, y):
             return False
         tile = self.get(x, y)
-        if tile.has_water_pipe or tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE:
-            return False
+        self._clear_natural_cover(tile)
         tile.has_water_pipe = True
         return True
 
     def place_building(self, x: int, y: int, building: BuildingType) -> bool:
-        if not self.in_bounds(x, y) or building == BuildingType.NONE:
+        if not self.can_place_building(x, y, building):
             return False
         tile = self.get(x, y)
-        if not tile.is_empty:
-            return False
+        self._clear_natural_cover(tile)
         tile.building = building
         return True
 
     def bulldoze(self, x: int, y: int) -> bool:
+        """Bulldoze structures and optionally terrain. Returns True if bulldozed."""
         if not self.in_bounds(x, y):
             return False
         tile = self.get(x, y)
-        if tile.is_empty:
-            return False
-        tile.clear()
-        return True
+        
+        # First, clear any man-made structures
+        if not tile.is_empty:
+            tile.clear()
+            return True
+        
+        # If tile is empty but has terrain, clear the terrain to grass
+        if tile.terrain != TerrainType.GRASS:
+            tile.terrain = TerrainType.GRASS
+            return True
+        
+        # Nothing to bulldoze
+        return False
 
     def road_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.has_road)
@@ -123,3 +211,7 @@ class CityMap:
         if building is None:
             return sum(1 for _, _, tile in self.iter_tiles() if tile.building != BuildingType.NONE)
         return sum(1 for _, _, tile in self.iter_tiles() if tile.building == building)
+
+    def _clear_natural_cover(self, tile: Tile) -> None:
+        if tile.terrain == TerrainType.FOREST:
+            tile.terrain = TerrainType.GRASS

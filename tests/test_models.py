@@ -1,12 +1,13 @@
 import unittest
 
-from citybuilder.models import BuildingType, CityStats, Tile, ZoneType
+from citybuilder.models import BuildingType, CityStats, TerrainType, Tile, VIEW_LABELS, VIEW_ORDER, ViewMode, ZoneType
 from citybuilder.settings import MAX_TAX_RATE, MIN_TAX_RATE
 
 
 class TileTests(unittest.TestCase):
     def test_clear_resets_tile_to_empty_defaults(self) -> None:
         tile = Tile(
+            terrain=TerrainType.HILL,
             zone=ZoneType.COMMERCIAL,
             building=BuildingType.SCHOOL,
             has_road=True,
@@ -21,10 +22,13 @@ class TileTests(unittest.TestCase):
             police_coverage=True,
             fire_coverage=True,
             education_coverage=True,
+            fire_risk=88,
+            crime_risk=77,
         )
 
         tile.clear()
 
+        self.assertEqual(tile.terrain, TerrainType.HILL)
         self.assertEqual(tile.zone, ZoneType.EMPTY)
         self.assertEqual(tile.building, BuildingType.NONE)
         self.assertFalse(tile.has_road)
@@ -39,6 +43,8 @@ class TileTests(unittest.TestCase):
         self.assertFalse(tile.police_coverage)
         self.assertFalse(tile.fire_coverage)
         self.assertFalse(tile.education_coverage)
+        self.assertEqual(tile.fire_risk, 0)
+        self.assertEqual(tile.crime_risk, 0)
         self.assertTrue(tile.is_empty)
 
 
@@ -81,6 +87,18 @@ class CityStatsTests(unittest.TestCase):
         self.assertEqual(stats.demand_for(ZoneType.COMMERCIAL), 40)
         self.assertEqual(stats.demand_for(ZoneType.INDUSTRIAL), 55)
         self.assertEqual(stats.demand_for(ZoneType.EMPTY), 0)
+
+
+class ViewModeTests(unittest.TestCase):
+    def test_view_modes_have_labels_and_order(self) -> None:
+        self.assertEqual(VIEW_ORDER[0], ViewMode.NORMAL)
+        self.assertIn(ViewMode.POWER, VIEW_ORDER)
+        self.assertIn(ViewMode.WATER, VIEW_ORDER)
+        self.assertIn(ViewMode.FIRE, VIEW_ORDER)
+        self.assertIn(ViewMode.POLICE, VIEW_ORDER)
+        self.assertIn(ViewMode.TERRAIN, VIEW_ORDER)
+        self.assertEqual(VIEW_LABELS[ViewMode.POWER], "Power")
+        self.assertEqual(VIEW_LABELS[ViewMode.TERRAIN], "Terrain")
 
 
 if __name__ == "__main__":

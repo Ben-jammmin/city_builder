@@ -1,6 +1,6 @@
 # Python/Pygame City Builder Prototype
 
-A small city-builder prototype inspired by SimCity 3000. It has a scrollable grid map, zoning, roads, money, population, taxes, power, water, services, demand bars, save/load, and a basic monthly simulation loop.
+A small city-builder prototype inspired by SimCity 3000. It has a scrollable grid map, generated terrain, zoning, roads, money, population, taxes, power, water, services, demand bars, save/load, and a basic monthly simulation loop.
 
 ## Run it
 
@@ -15,12 +15,27 @@ If Pygame is already installed, you can run `python main.py` directly from this 
 
 New cities start paused so you can look around and build before time begins. Press `Space` or the `Run` button to start the simulation.
 
+New cities start with generated terrain: grass, water, forests, and hills. Water blocks construction. Use the bulldoze tool to clear terrain:
+- **Water**: $50 per tile
+- **Forest**: $15 per tile  
+- **Hills**: $25 per tile
+
+The starting view keeps a clear buildable area to begin with.
+
 ## Run tests
 
 The tests use Python's built-in `unittest` module, so there is no extra test dependency.
 
 ```powershell
 python -m unittest discover
+```
+
+## System notes
+
+For beginner-friendly notes on how each system works and how to improve it, read:
+
+```text
+docs/SYSTEM_NOTES.md
 ```
 
 ## Controls
@@ -47,9 +62,24 @@ python -m unittest discover
 - `F11`: toggle fullscreen
 - `Alt+Enter`: toggle fullscreen
 - `Full` / `Window` button: toggle fullscreen
+- `V`: cycle map view mode
+- `Shift+V`: cycle map view mode backward
 - `+` / `-`: adjust taxes
 - `F5`: save
 - `F9`: load
+
+## Map views
+
+Press `V` to cycle through system views:
+
+- `Normal`: full city view with roads, zones, buildings, utilities, and warnings
+- `Power`: shows power plants, power lines, powered zones, and unpowered zones
+- `Water`: shows water towers, water pipes, watered zones, and unwatered zones
+- `Fire`: shows fire stations, fire coverage, and fire risk
+- `Police`: shows police stations, police coverage, and crime risk
+- `Terrain`: shows grass, water, forests, hills, and light city context
+
+System views keep faint roads and small markers for every service building visible, so you can plan hookups and coverage without losing track of the city layout.
 
 ## Menus and panels
 
@@ -73,6 +103,10 @@ It also shows:
 
 Every simulated month:
 
+- Roads automatically connect visually to neighboring road tiles.
+- Water terrain blocks zones, roads, utility lines, and buildings.
+- Building on forest clears that forest tile to grass.
+- If you try to build on water, the advisor explains why it failed.
 - Zoned tiles grow only when they are next to a road.
 - Zones also need power and water to develop.
 - Residential zones create population.
@@ -82,6 +116,16 @@ Every simulated month:
 - Population and jobs generate tax revenue.
 - Power plants and water towers create utility capacity.
 - Power lines and water pipes connect nearby zones to those systems.
+- Power lines automatically connect visually to neighboring power lines and power plants.
+- The Systems panel shows power usage, capacity, supply percent, and unpowered zones.
+- Water pipes automatically connect visually to neighboring water pipes and water towers.
+- The Systems panel shows water usage, capacity, supply percent, and unwatered zones.
+- Fire stations provide local fire coverage.
+- The Systems panel shows fire coverage percent and average fire risk.
+- Tiles show fire risk in the inspector, and high-risk zones get a small red marker on the map.
+- Police stations provide local police coverage.
+- The Systems panel shows police coverage percent and average crime risk.
+- Tiles show crime risk in the inspector, and high-crime zones get a small blue marker on the map.
 - Police, fire, and schools improve service coverage and land value.
 
 ## Save files
@@ -97,5 +141,6 @@ The code is split into beginner-friendly modules:
 - `citybuilder/save_load.py`: JSON save/load helpers
 - `citybuilder/renderer.py`: map drawing
 - `citybuilder/ui.py`: sidebar and HUD
+- `citybuilder/terrain.py`: simple terrain generation
 - `citybuilder/models.py`: shared data classes and enums
 - `citybuilder/settings.py`: constants and colors

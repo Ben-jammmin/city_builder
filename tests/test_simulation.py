@@ -132,6 +132,62 @@ class SimulationTests(unittest.TestCase):
         self.assertGreater(stats.water_capacity, 0)
         self.assertGreater(stats.powered_tiles, 0)
         self.assertGreater(stats.watered_tiles, 0)
+        self.assertEqual(stats.power_satisfaction, 100)
+        self.assertEqual(stats.water_satisfaction, 100)
+
+    def test_unpowered_zones_are_reported(self) -> None:
+        city_map = CityMap(4, 4)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        city_map.place_building(0, 0, BuildingType.POWER_PLANT)
+        city_map.place_zone(3, 3, ZoneType.RESIDENTIAL)
+
+        simulation.simulate_month()
+
+        self.assertEqual(stats.unpowered_zones, 1)
+        self.assertFalse(city_map.get(3, 3).powered)
+        self.assertIn("not connected to power", stats.messages[-1])
+
+    def test_power_satisfaction_reports_capacity_shortage(self) -> None:
+        city_map = CityMap(3, 3)
+        stats = CityStats(population=1000, jobs=0)
+        simulation = Simulation(city_map, stats)
+        city_map.place_building(0, 0, BuildingType.POWER_PLANT)
+
+        simulation._update_system_totals()
+
+        self.assertEqual(stats.power_capacity, 220)
+        self.assertEqual(stats.power_usage, 800)
+        self.assertEqual(stats.power_satisfaction, 27)
+
+    def test_unwatered_zones_are_reported(self) -> None:
+        city_map = CityMap(4, 4)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        city_map.place_building(0, 0, BuildingType.POWER_PLANT)
+        city_map.place_power_line(1, 0)
+        city_map.place_building(3, 0, BuildingType.WATER_TOWER)
+        city_map.place_zone(1, 1, ZoneType.RESIDENTIAL)
+
+        simulation.simulate_month()
+
+        self.assertEqual(stats.unpowered_zones, 0)
+        self.assertEqual(stats.unwatered_zones, 1)
+        self.assertTrue(city_map.get(1, 1).powered)
+        self.assertFalse(city_map.get(1, 1).watered)
+        self.assertIn("not connected to water", stats.messages[-1])
+
+    def test_water_satisfaction_reports_capacity_shortage(self) -> None:
+        city_map = CityMap(3, 3)
+        stats = CityStats(population=1000, jobs=0)
+        simulation = Simulation(city_map, stats)
+        city_map.place_building(0, 0, BuildingType.WATER_TOWER)
+
+        simulation._update_system_totals()
+
+        self.assertEqual(stats.water_capacity, 180)
+        self.assertEqual(stats.water_usage, 700)
+        self.assertEqual(stats.water_satisfaction, 25)
 
     def test_service_buildings_raise_service_score_for_zones(self) -> None:
         city_map = CityMap(8, 8)
@@ -150,6 +206,107 @@ class SimulationTests(unittest.TestCase):
         self.assertTrue(tile.fire_coverage)
         self.assertTrue(tile.education_coverage)
         self.assertEqual(stats.service_score, 100)
+
+    def test_fire_station_reports_covered_and_uncovered_zones(self) -> None:
+        city_map = CityMap(12, 12)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        self.add_basic_power_and_water(city_map)
+        city_map.place_building(4, 4, BuildingType.FIRE)
+        city_map.place_zone(1, 2, ZoneType.RESIDENTIAL)
+        city_map.place_zone(11, 11, ZoneType.RESIDENTIAL)
+
+        simulation.simulate_month()
+
+        self.assertTrue(city_map.get(1, 2).fire_coverage)
+        self.assertFalse(city_map.get(11, 11).fire_coverage)
+        self.assertEqual(stats.fire_coverage_percent, 50)
+        self.assertEqual(stats.fire_uncovered_zones, 1)
+
+    def test_fire_station_reduces_tile_fire_risk(self) -> None:
+        protected_map = CityMap(8, 8)
+        exposed_map = CityMap(8, 8)
+        protected_stats = CityStats()
+        exposed_stats = CityStats()
+        protected_sim = Simulation(protected_map, protected_stats)
+        exposed_sim = Simulation(exposed_map, exposed_stats)
+
+        for city_map in (protected_map, exposed_map):
+            self.add_basic_power_and_water(city_map)
+            city_map.place_zone(1, 2, ZoneType.INDUSTRIAL)
+            city_map.get(1, 2).development = 0.8
+        protected_map.place_building(4, 4, BuildingType.FIRE)
+
+        protected_sim.simulate_month()
+        exposed_sim.simulate_month()
+
+        self.assertLess(
+            protected_map.get(1, 2).fire_risk,
+            exposed_map.get(1, 2).fire_risk,
+        )
+
+    def test_uncovered_fire_zones_add_advisor_message(self) -> None:
+        city_map = CityMap(6, 6)
+        stats = CityStats(messages=[])
+        simulation = Simulation(city_map, stats)
+        self.add_basic_power_and_water(city_map)
+        city_map.place_zone(1, 2, ZoneType.RESIDENTIAL)
+
+        simulation.simulate_month()
+
+        self.assertEqual(stats.fire_uncovered_zones, 1)
+        self.assertIn("outside fire station coverage", stats.messages[-1])
+
+    def test_police_station_reports_covered_and_uncovered_zones(self) -> None:
+        city_map = CityMap(12, 12)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        self.add_basic_power_and_water(city_map)
+        city_map.place_building(4, 4, BuildingType.POLICE)
+        city_map.place_zone(1, 2, ZoneType.RESIDENTIAL)
+        city_map.place_zone(11, 11, ZoneType.RESIDENTIAL)
+
+        simulation.simulate_month()
+
+        self.assertTrue(city_map.get(1, 2).police_coverage)
+        self.assertFalse(city_map.get(11, 11).police_coverage)
+        self.assertEqual(stats.police_coverage_percent, 50)
+        self.assertEqual(stats.police_uncovered_zones, 1)
+
+    def test_police_station_reduces_tile_crime_risk(self) -> None:
+        protected_map = CityMap(8, 8)
+        exposed_map = CityMap(8, 8)
+        protected_stats = CityStats()
+        exposed_stats = CityStats()
+        protected_sim = Simulation(protected_map, protected_stats)
+        exposed_sim = Simulation(exposed_map, exposed_stats)
+
+        for city_map in (protected_map, exposed_map):
+            self.add_basic_power_and_water(city_map)
+            city_map.place_zone(1, 2, ZoneType.COMMERCIAL)
+            city_map.get(1, 2).development = 0.8
+        protected_map.place_building(4, 4, BuildingType.POLICE)
+
+        protected_sim.simulate_month()
+        exposed_sim.simulate_month()
+
+        self.assertLess(
+            protected_map.get(1, 2).crime_risk,
+            exposed_map.get(1, 2).crime_risk,
+        )
+
+    def test_uncovered_police_zones_add_advisor_message(self) -> None:
+        city_map = CityMap(6, 6)
+        stats = CityStats(messages=[])
+        simulation = Simulation(city_map, stats)
+        self.add_basic_power_and_water(city_map)
+        city_map.place_building(4, 4, BuildingType.FIRE)
+        city_map.place_zone(1, 2, ZoneType.RESIDENTIAL)
+
+        simulation.simulate_month()
+
+        self.assertEqual(stats.police_uncovered_zones, 1)
+        self.assertIn("outside police station coverage", stats.messages[-1])
 
     def test_demand_values_stay_in_percent_range(self) -> None:
         city_map = CityMap(4, 4)

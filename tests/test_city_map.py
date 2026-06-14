@@ -1,7 +1,7 @@
 import unittest
 
 from citybuilder.city_map import CityMap
-from citybuilder.models import BuildingType, ZoneType
+from citybuilder.models import BuildingType, TerrainType, ZoneType
 
 
 class CityMapTests(unittest.TestCase):
@@ -86,6 +86,57 @@ class CityMapTests(unittest.TestCase):
         self.assertEqual(city_map.building_count(), 1)
         self.assertEqual(city_map.building_count(BuildingType.FIRE), 1)
 
+    def test_water_terrain_blocks_construction(self) -> None:
+        city_map = CityMap(4, 4)
+        water_tile = city_map.get(1, 1)
+        water_tile.terrain = TerrainType.WATER
+
+        self.assertFalse(city_map.can_place_zone(1, 1, ZoneType.RESIDENTIAL))
+        self.assertFalse(city_map.can_place_road(1, 1))
+        self.assertFalse(city_map.can_place_power_line(1, 1))
+        self.assertFalse(city_map.can_place_water_pipe(1, 1))
+        self.assertFalse(city_map.can_place_building(1, 1, BuildingType.FIRE))
+        self.assertFalse(city_map.place_zone(1, 1, ZoneType.RESIDENTIAL))
+        self.assertFalse(city_map.place_road(1, 1))
+        self.assertFalse(city_map.place_power_line(1, 1))
+        self.assertFalse(city_map.place_water_pipe(1, 1))
+        self.assertFalse(city_map.place_building(1, 1, BuildingType.FIRE))
+        self.assertTrue(water_tile.is_empty)
+
+    def test_can_place_helpers_accept_clear_buildable_land(self) -> None:
+        city_map = CityMap(4, 4)
+
+        self.assertTrue(city_map.can_place_zone(1, 1, ZoneType.RESIDENTIAL))
+        self.assertTrue(city_map.can_place_road(1, 1))
+        self.assertTrue(city_map.can_place_power_line(1, 1))
+        self.assertTrue(city_map.can_place_water_pipe(1, 1))
+        self.assertTrue(city_map.can_place_building(1, 1, BuildingType.SCHOOL))
+
+    def test_building_on_forest_clears_it_to_grass(self) -> None:
+        city_map = CityMap(4, 4)
+        city_map.get(1, 1).terrain = TerrainType.FOREST
+        city_map.get(2, 2).terrain = TerrainType.FOREST
+
+        # Roads can be placed on forest
+        self.assertTrue(city_map.place_road(1, 1))
+        self.assertEqual(city_map.get(1, 1).terrain, TerrainType.GRASS)
+        
+        # Zones require bulldozing terrain first
+        self.assertFalse(city_map.place_zone(2, 2, ZoneType.RESIDENTIAL))
+        self.assertTrue(city_map.bulldoze(2, 2))  # Clear forest to grass
+        self.assertTrue(city_map.place_zone(2, 2, ZoneType.RESIDENTIAL))
+        self.assertEqual(city_map.get(2, 2).terrain, TerrainType.GRASS)
+
+    def test_bulldoze_preserves_terrain(self) -> None:
+        city_map = CityMap(3, 3)
+        city_map.get(1, 1).terrain = TerrainType.HILL
+        city_map.place_road(1, 1)
+
+        self.assertTrue(city_map.bulldoze(1, 1))
+
+        self.assertEqual(city_map.get(1, 1).terrain, TerrainType.HILL)
+        self.assertTrue(city_map.get(1, 1).is_empty)
+
     def test_bulldoze_clears_road_or_zone(self) -> None:
         city_map = CityMap(3, 3)
         city_map.place_road(0, 0)
@@ -116,6 +167,76 @@ class CityMapTests(unittest.TestCase):
         self.assertEqual(len(list(city_map.neighbors8(0, 0))), 3)
         self.assertTrue(city_map.has_adjacent_road(1, 0))
         self.assertFalse(city_map.has_adjacent_road(1, 1))
+
+    def test_road_connections_report_cardinal_neighbor_roads(self) -> None:
+        city_map = CityMap(5, 5)
+        city_map.place_road(2, 2)
+        city_map.place_road(2, 1)
+        city_map.place_road(3, 2)
+        city_map.place_road(2, 3)
+
+        self.assertEqual(
+            city_map.road_connections(2, 2),
+            {"north": True, "east": True, "south": True, "west": False},
+        )
+
+    def test_road_connections_ignore_diagonal_roads_and_empty_tiles(self) -> None:
+        city_map = CityMap(3, 3)
+        city_map.place_road(1, 1)
+        city_map.place_road(0, 0)
+
+        self.assertEqual(
+            city_map.road_connections(1, 1),
+            {"north": False, "east": False, "south": False, "west": False},
+        )
+        self.assertEqual(
+            city_map.road_connections(2, 2),
+            {"north": False, "east": False, "south": False, "west": False},
+        )
+
+    def test_power_connections_link_lines_to_lines_and_power_plants(self) -> None:
+        city_map = CityMap(4, 4)
+        city_map.place_building(1, 0, BuildingType.POWER_PLANT)
+        city_map.place_power_line(1, 1)
+        city_map.place_power_line(2, 1)
+
+        self.assertEqual(
+            city_map.power_connections(1, 1),
+            {"north": True, "east": True, "south": False, "west": False},
+        )
+
+    def test_power_connections_ignore_roads_zones_and_empty_tiles(self) -> None:
+        city_map = CityMap(3, 3)
+        city_map.place_power_line(1, 1)
+        city_map.place_road(1, 0)
+        city_map.place_zone(2, 1, ZoneType.RESIDENTIAL)
+
+        self.assertEqual(
+            city_map.power_connections(1, 1),
+            {"north": False, "east": False, "south": False, "west": False},
+        )
+
+    def test_water_connections_link_pipes_to_pipes_and_water_towers(self) -> None:
+        city_map = CityMap(4, 4)
+        city_map.place_building(1, 0, BuildingType.WATER_TOWER)
+        city_map.place_water_pipe(1, 1)
+        city_map.place_water_pipe(2, 1)
+
+        self.assertEqual(
+            city_map.water_connections(1, 1),
+            {"north": True, "east": True, "south": False, "west": False},
+        )
+
+    def test_water_connections_ignore_roads_zones_and_empty_tiles(self) -> None:
+        city_map = CityMap(3, 3)
+        city_map.place_water_pipe(1, 1)
+        city_map.place_road(1, 0)
+        city_map.place_zone(2, 1, ZoneType.RESIDENTIAL)
+
+        self.assertEqual(
+            city_map.water_connections(1, 1),
+            {"north": False, "east": False, "south": False, "west": False},
+        )
 
 
 if __name__ == "__main__":
