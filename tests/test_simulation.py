@@ -21,7 +21,7 @@ class SimulationTests(unittest.TestCase):
         simulation.update(dt=10.0, seconds_per_month=1.0)
 
         self.assertEqual(stats.month, 1)
-        self.assertEqual(stats.money, 25000)
+        self.assertEqual(stats.money, 50000)
         self.assertEqual(simulation.elapsed, 0.0)
 
     def test_update_can_process_multiple_months(self) -> None:
@@ -157,8 +157,8 @@ class SimulationTests(unittest.TestCase):
 
         simulation._update_system_totals()
 
-        self.assertEqual(stats.power_capacity, 650)
-        self.assertEqual(stats.water_capacity, 520)
+        self.assertEqual(stats.power_capacity, 2000)
+        self.assertEqual(stats.water_capacity, 1500)
 
     def test_dense_residential_and_commercial_zones_have_more_capacity(self) -> None:
         standard_map = CityMap(5, 5)

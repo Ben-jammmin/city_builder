@@ -1,4 +1,7 @@
+"""City simulation — runs every month to update growth, demand, utilities, and disasters."""
 from __future__ import annotations
+
+import random
 
 from .city_map import CityMap
 from .models import BuildingType, CityStats, Tile, ZoneType
@@ -8,6 +11,10 @@ from .settings import (
     BUILDING_MAINTENANCE,
     COMMERCIAL_CAPACITY,
     COMMERCIAL_NEIGHBOR_BONUS,
+    CONGESTION_DEMAND_PENALTY,
+    EDUCATION_GROWTH_BONUS,
+    HEALTH_GROWTH_BONUS,
+    HEALTH_RADIUS,
     CRIME_RISK_BASE,
     CRIME_RISK_COMMERCIAL,
     CRIME_RISK_COMMERCIAL_NEIGHBOR,
@@ -72,6 +79,20 @@ from .settings import (
     PARK_DEMAND_BONUS,
     PARK_LAND_VALUE_BONUS,
     PARK_MAINTENANCE,
+    RECREATION_LAND_VALUE,
+    FIRE_UPDATE_INTERVAL,
+    FIRE_IGNITION_PROB,
+    FIRE_SPREAD_INTERVAL,
+    FIRE_SPREAD_CHANCE,
+    FIRE_BURN_RATE,
+    FIRE_SUPPRESS_TIME,
+    FIRE_NATURAL_EXTINGUISH,
+    FIRE_EMERGENCY_COST,
+    CRIME_INCIDENT_PROB,
+    CRIME_DAMAGE_RATE,
+    CRIME_CLEANUP_COST,
+    POPULATION_MILESTONES,
+    ROAD_TRAFFIC_CAPACITY,
 )
 from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS
 
@@ -81,6 +102,8 @@ class Simulation:
         self.city_map = city_map
         self.stats = stats
         self.elapsed = 0.0
+        self._fires: dict[tuple[int, int], float] = {}  # (x,y) -> seconds burning
+        self._fire_elapsed = 0.0
 
     def refresh_systems(self) -> None:
         """Refresh sidebar-facing city systems without advancing the calendar."""
@@ -101,6 +124,10 @@ class Simulation:
         if self.stats.paused:
             return
         self.elapsed += dt
+        self._fire_elapsed += dt
+        while self._fire_elapsed >= FIRE_UPDATE_INTERVAL:
+            self._fire_elapsed -= FIRE_UPDATE_INTERVAL
+            self._update_fires(FIRE_UPDATE_INTERVAL)
         while self.elapsed >= seconds_per_month:
             self.elapsed -= seconds_per_month
             self.simulate_month()
@@ -116,9 +143,15 @@ class Simulation:
 
         population = 0
         jobs = 0
+        com_jobs = 0
+        ind_jobs = 0
         for _, _, tile in self.city_map.iter_tiles():
             population += tile.residents
             jobs += tile.jobs
+            if tile.zone == ZoneType.COMMERCIAL:
+                com_jobs += tile.jobs
+            elif tile.zone == ZoneType.INDUSTRIAL:
+                ind_jobs += tile.jobs
 
         self.stats.population = population
         self.stats.jobs = jobs
@@ -126,22 +159,40 @@ class Simulation:
         self.stats.last_job_delta = jobs - previous_jobs
         self._update_system_totals()
 
-        revenue = int(population * self.stats.tax_rate * POPULATION_TAX_COEFFICIENT + jobs * self.stats.tax_rate * JOBS_TAX_COEFFICIENT)
-        expenses = int(
-            self.city_map.road_count() * ROAD_MAINTENANCE
-            + self.city_map.zone_maintenance_units() * ZONE_MAINTENANCE
+        tax = self.stats.tax_rate
+        rev_res = int(population * tax * POPULATION_TAX_COEFFICIENT)
+        rev_com = int(com_jobs * tax * JOBS_TAX_COEFFICIENT)
+        rev_ind = int(ind_jobs * tax * JOBS_TAX_COEFFICIENT)
+        revenue = rev_res + rev_com + rev_ind
+        self.stats.rev_residential = rev_res
+        self.stats.rev_commercial = rev_com
+        self.stats.rev_industrial = rev_ind
+
+        exp_roads = int(self.city_map.road_count() * ROAD_MAINTENANCE)
+        exp_utilities = int(
+            self.city_map.zone_maintenance_units() * ZONE_MAINTENANCE
             + self.city_map.power_line_count() * POWER_LINE_MAINTENANCE
             + self.city_map.water_pipe_count() * WATER_PIPE_MAINTENANCE
-            + sum(
-                self.city_map.building_count(BuildingType(building_name)) * cost
-                for building_name, cost in BUILDING_MAINTENANCE.items()
-            )
-            + self.city_map.park_count() * PARK_MAINTENANCE
         )
+        exp_buildings = int(sum(
+            self.city_map.building_count(BuildingType(name)) * cost
+            for name, cost in BUILDING_MAINTENANCE.items()
+        ))
+        exp_recreation = int(self.city_map.recreation_maintenance_cost())
+        expenses = exp_roads + exp_utilities + exp_buildings + exp_recreation
+        self.stats.exp_roads = exp_roads
+        self.stats.exp_utilities = exp_utilities
+        self.stats.exp_buildings = exp_buildings
+        self.stats.exp_recreation = exp_recreation
+
         self.stats.last_revenue = revenue
         self.stats.last_expenses = expenses
         self.stats.money += revenue - expenses
         self.stats.advance_month()
+        self._update_traffic()
+        self._check_fire_ignition()
+        self._check_crime_incidents()
+        self._check_milestones()
         self._add_monthly_message(revenue, expenses)
 
     def _update_all_tiles(self) -> None:
@@ -170,6 +221,10 @@ class Simulation:
                     * tile.land_value
                     * self._utility_capacity_factor()
                 )
+                if tile.education_coverage:
+                    growth *= (1.0 + EDUCATION_GROWTH_BONUS)
+                if tile.health_coverage:
+                    growth *= (1.0 + HEALTH_GROWTH_BONUS)
                 tile.development = min(1.0, tile.development + growth)
             else:
                 tile.development = max(0.0, tile.development - DEVELOPMENT_DECLINE_RATE)
@@ -201,7 +256,7 @@ class Simulation:
             elif neighbor.zone == ZoneType.INDUSTRIAL:
                 value -= INDUSTRIAL_NEIGHBOR_PENALTY
             elif neighbor.zone == ZoneType.PARK:
-                value += PARK_LAND_VALUE_BONUS
+                value += RECREATION_LAND_VALUE.get(neighbor.recreation_type.value, PARK_LAND_VALUE_BONUS)
             elif neighbor.has_road:
                 value += ROAD_NEIGHBOR_BONUS
         return max(LAND_VALUE_MIN, min(LAND_VALUE_MAX, value))
@@ -301,19 +356,20 @@ class Simulation:
             tile.police_coverage = (x, y) in service_tiles["police"]
             tile.fire_coverage = (x, y) in service_tiles["fire"]
             tile.education_coverage = (x, y) in service_tiles["school"]
+            tile.health_coverage = (x, y) in service_tiles["health"]
 
-        self.stats.powered_tiles = sum(1 for _, _, tile in self.city_map.iter_tiles() if tile.powered)
         self.stats.unpowered_zones = sum(
             1
             for _, _, tile in self.city_map.iter_tiles()
             if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK) and not tile.powered
         )
-        self.stats.watered_tiles = sum(1 for _, _, tile in self.city_map.iter_tiles() if tile.watered)
         self.stats.unwatered_zones = sum(
             1
             for _, _, tile in self.city_map.iter_tiles()
             if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK) and not tile.watered
         )
+        self.stats.powered_tiles = sum(1 for _, _, tile in self.city_map.iter_tiles() if tile.powered)
+        self.stats.watered_tiles = sum(1 for _, _, tile in self.city_map.iter_tiles() if tile.watered)
 
     def _connected_network(self, source_buildings: set[BuildingType], line_attr: str) -> set[tuple[int, int]]:
         starts = [
@@ -341,11 +397,12 @@ class Simulation:
         return any((nx, ny) in network for nx, ny, _ in self.city_map.neighbors4(x, y))
 
     def _service_tiles(self) -> dict[str, set[tuple[int, int]]]:
-        coverage = {"police": set(), "fire": set(), "school": set()}
+        coverage = {"police": set(), "fire": set(), "school": set(), "health": set()}
         building_to_key = {
             BuildingType.POLICE: ("police", POLICE_RADIUS),
             BuildingType.FIRE: ("fire", FIRE_RADIUS),
             BuildingType.SCHOOL: ("school", SERVICE_RADIUS),
+            BuildingType.HOSPITAL: ("health", HEALTH_RADIUS),
         }
 
         # Use BFS from each service building for efficient coverage calculation
@@ -376,28 +433,71 @@ class Simulation:
                             next_frontier.append((nx, ny))
             frontier = next_frontier
 
+    def _update_traffic(self) -> None:
+        for _, _, tile in self.city_map.iter_tiles():
+            if tile.has_road:
+                tile.traffic_load = 0
+        _mult = {ZoneType.RESIDENTIAL: 5, ZoneType.COMMERCIAL: 10, ZoneType.INDUSTRIAL: 15}
+        for x, y, tile in self.city_map.iter_tiles():
+            m = _mult.get(tile.zone, 0)
+            if m == 0 or tile.development < 0.1:
+                continue
+            traffic = int(tile.development * m)
+            road_nbrs = [(nx, ny) for nx, ny, t in self.city_map.neighbors4(x, y) if t.has_road]
+            if road_nbrs:
+                per_road = max(1, traffic // len(road_nbrs))
+                for nx, ny in road_nbrs:
+                    nt = self.city_map.get(nx, ny)
+                    nt.traffic_load = min(99, nt.traffic_load + per_road)
+
     def _update_demand(self) -> None:
         population = self.stats.population
         jobs = self.stats.jobs
         service_bonus = self.stats.service_score * SERVICE_BONUS_MULTIPLIER
         utility_bonus = self._utility_capacity_factor() * UTILITY_BONUS_MULTIPLIER
-        tax_penalty = self.stats.tax_rate * TAX_PENALTY_RESIDENTIAL
-        
-        # Add demand boost from transport buildings
+        res_tax_penalty = self.stats.tax_rate * TAX_PENALTY_RESIDENTIAL
+        com_tax_penalty = self.stats.tax_rate * TAX_PENALTY_COMMERCIAL
+        ind_tax_penalty = self.stats.tax_rate * TAX_PENALTY_INDUSTRIAL
+
         train_boost = self.city_map.building_count(BuildingType.TRAIN_STATION) * TRAIN_STATION_DEMAND_BOOST
         airport_boost = self.city_map.building_count(BuildingType.AIRPORT) * AIRPORT_DEMAND_BOOST
         transport_bonus = train_boost + airport_boost
 
-        park_bonus = self.city_map.park_count() * PARK_DEMAND_BONUS
+        rec_res_bonus, rec_com_bonus = self.city_map.recreation_demand_bonus()
+
+        congested = sum(
+            1 for _, _, t in self.city_map.iter_tiles()
+            if t.has_road and t.traffic_load > ROAD_TRAFFIC_CAPACITY
+        )
+        congestion_penalty = min(25, congested * CONGESTION_DEMAND_PENALTY)
 
         self.stats.demand_residential = self._clamp_percent(
-            45 + jobs * 0.45 - population * 0.18 + service_bonus + utility_bonus - tax_penalty + transport_bonus * 0.3 + park_bonus * 0.4
+            45
+            + jobs * 0.45
+            - population * 0.18
+            + service_bonus
+            + utility_bonus
+            - res_tax_penalty
+            + transport_bonus * 0.3
+            + rec_res_bonus * 0.4
         )
         self.stats.demand_commercial = self._clamp_percent(
-            40 + population * 0.22 - jobs * 0.10 + service_bonus - self.stats.tax_rate * TAX_PENALTY_COMMERCIAL + transport_bonus + park_bonus * 0.2
+            40
+            + population * 0.22
+            - jobs * 0.10
+            + service_bonus
+            - com_tax_penalty
+            + transport_bonus
+            + rec_com_bonus * 0.5
+            - congestion_penalty
         )
         self.stats.demand_industrial = self._clamp_percent(
-            38 + population * 0.18 - jobs * 0.08 + utility_bonus - self.stats.tax_rate * TAX_PENALTY_INDUSTRIAL + transport_bonus * 0.7
+            38
+            + population * 0.18
+            - jobs * 0.08
+            + utility_bonus
+            - ind_tax_penalty
+            + transport_bonus * 0.7
         )
 
     def _update_system_totals(self) -> None:
@@ -471,6 +571,128 @@ class Simulation:
 
     def _clamp_percent(self, value: float) -> int:
         return max(0, min(100, int(value)))
+
+    # ------------------------------------------------------------------ #
+    # Fire disaster                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _ignite_tile(self, x: int, y: int) -> None:
+        if (x, y) in self._fires:
+            return
+        self._fires[(x, y)] = 0.0
+        self.city_map.get(x, y).on_fire = True
+
+    def _extinguish_tile(self, x: int, y: int) -> None:
+        self._fires.pop((x, y), None)
+        self.city_map.get(x, y).on_fire = False
+
+    def _update_fires(self, tick: float) -> None:
+        to_extinguish: list[tuple[int, int]] = []
+        to_spread: list[tuple[int, int]] = []
+
+        for pos in list(self._fires):
+            x, y = pos
+            self._fires[pos] += tick
+            burn_time = self._fires[pos]
+            tile = self.city_map.get(x, y)
+
+            # Tile was bulldozed — clear fire
+            if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
+                to_extinguish.append(pos)
+                continue
+
+            tile.development = max(0.0, tile.development - FIRE_BURN_RATE)
+
+            if tile.development <= 0.0:
+                to_extinguish.append(pos)
+                continue
+
+            if tile.fire_coverage and burn_time >= FIRE_SUPPRESS_TIME:
+                to_extinguish.append(pos)
+                self.stats.add_message("Fire contained by fire station.")
+                continue
+
+            if burn_time >= FIRE_NATURAL_EXTINGUISH:
+                to_extinguish.append(pos)
+                continue
+
+            # Spread check on interval boundary
+            prev = int((burn_time - tick) / FIRE_SPREAD_INTERVAL)
+            curr = int(burn_time / FIRE_SPREAD_INTERVAL)
+            if curr > prev:
+                to_spread.append(pos)
+
+        for pos in to_extinguish:
+            self._extinguish_tile(*pos)
+
+        for x, y in to_spread:
+            for nx, ny, neighbor in self.city_map.neighbors4(x, y):
+                if (nx, ny) in self._fires:
+                    continue
+                if neighbor.zone in (ZoneType.EMPTY, ZoneType.PARK):
+                    continue
+                if neighbor.development < 0.1:
+                    continue
+                chance = FIRE_SPREAD_CHANCE * (1.4 if not neighbor.fire_coverage else 0.5)
+                if random.random() < chance:
+                    self._ignite_tile(nx, ny)
+
+    def _check_fire_ignition(self) -> None:
+        candidates = [
+            (x, y)
+            for x, y, tile in self.city_map.iter_tiles()
+            if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK)
+            and tile.fire_risk >= HIGH_RISK_THRESHOLD
+            and not tile.fire_coverage
+            and tile.development > 0.15
+            and (x, y) not in self._fires
+        ]
+        if not candidates:
+            return
+        total_prob = min(0.55, len(candidates) * FIRE_IGNITION_PROB)
+        if random.random() < total_prob:
+            x, y = random.choice(candidates)
+            self._ignite_tile(x, y)
+            self.stats.money -= FIRE_EMERGENCY_COST
+            self.stats.add_message(f"Fire outbreak! Emergency services: ${FIRE_EMERGENCY_COST}.")
+
+    # ------------------------------------------------------------------ #
+    # Crime incident                                                       #
+    # ------------------------------------------------------------------ #
+
+    def _check_crime_incidents(self) -> None:
+        candidates = [
+            (x, y)
+            for x, y, tile in self.city_map.iter_tiles()
+            if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK)
+            and tile.crime_risk >= HIGH_RISK_THRESHOLD
+            and not tile.police_coverage
+            and tile.development > 0.15
+        ]
+        if not candidates:
+            return
+        total_prob = min(0.50, len(candidates) * CRIME_INCIDENT_PROB)
+        if random.random() >= total_prob:
+            return
+        x, y = random.choice(candidates)
+        tile = self.city_map.get(x, y)
+        tile.development = max(0.0, tile.development - CRIME_DAMAGE_RATE)
+        self.stats.money -= CRIME_CLEANUP_COST
+        self.stats.add_message(f"Crime incident! Property damage. Cleanup: ${CRIME_CLEANUP_COST}.")
+
+    # ------------------------------------------------------------------ #
+    # City milestones                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _check_milestones(self) -> None:
+        for pop, title, grant in POPULATION_MILESTONES:
+            if self.stats.population >= pop and self.stats.milestone_pop < pop:
+                self.stats.milestone_pop = pop
+                self.stats.money += grant
+                self.stats.add_message(
+                    f"Milestone: {title}! ({pop:,} residents) State grant: ${grant:,}."
+                )
+                break  # one milestone per month
 
     def _add_monthly_message(self, revenue: int, expenses: int) -> None:
         messages: list[str] = []

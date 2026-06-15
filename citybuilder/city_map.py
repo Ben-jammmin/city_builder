@@ -1,8 +1,10 @@
+"""The city grid — stores every Tile and exposes helpers for placement, queries, and counts."""
 from __future__ import annotations
 
 from collections.abc import Iterator
 
-from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS, BuildingType, TerrainType, Tile, ZoneType
+from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS, BuildingType, RecreationType, TerrainType, Tile, ZoneType
+from .settings import RECREATION_MAINTENANCE, RECREATION_DEMAND_RES, RECREATION_DEMAND_COM, RECREATION_LAND_VALUE
 
 
 class CityMap:
@@ -21,6 +23,9 @@ class CityMap:
         for x in range(self.width):
             for y in range(self.height):
                 yield x, y, self.tiles[x][y]
+
+    def zoned_count(self) -> int:
+        return sum(1 for _, _, tile in self.iter_tiles() if tile.zone != ZoneType.EMPTY)
 
     def neighbors4(self, x: int, y: int) -> Iterator[tuple[int, int, Tile]]:
         for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
@@ -52,13 +57,18 @@ class CityMap:
     def is_water(self, x: int, y: int) -> bool:
         return self.in_bounds(x, y) and self.get(x, y).terrain == TerrainType.WATER
 
-    def can_place_zone(self, x: int, y: int, zone: ZoneType, level: int = 1) -> bool:
+    def can_place_zone(self, x: int, y: int, zone: ZoneType, level: int = 1, recreation_type: RecreationType | None = None) -> bool:
         if not self.is_clear_land(x, y):
             return False
         tile = self.get(x, y)
         if tile.has_road or tile.has_power_line or tile.has_water_pipe or tile.building != BuildingType.NONE:
             return False
-        return tile.zone != zone or tile.zone_level != level
+        if tile.zone != zone or tile.zone_level != level:
+            return True
+        # Same zone+level — allow if placing a different recreation type
+        if zone == ZoneType.PARK and recreation_type is not None and tile.recreation_type != recreation_type:
+            return True
+        return False
 
     def can_place_road(self, x: int, y: int) -> bool:
         if not self.is_buildable_land(x, y):
@@ -130,13 +140,15 @@ class CityMap:
         tile = self.get(x, y)
         return tile.has_water_pipe or tile.building in WATER_SOURCE_BUILDINGS
 
-    def place_zone(self, x: int, y: int, zone: ZoneType, level: int = 1) -> bool:
-        if not self.can_place_zone(x, y, zone, level):
+    def place_zone(self, x: int, y: int, zone: ZoneType, level: int = 1, recreation_type: RecreationType | None = None) -> bool:
+        if not self.can_place_zone(x, y, zone, level, recreation_type):
             return False
         tile = self.get(x, y)
         self._clear_natural_cover(tile)
         tile.zone = zone
         tile.zone_level = level
+        if zone == ZoneType.PARK and recreation_type is not None:
+            tile.recreation_type = recreation_type
         tile.development = 0.0
         tile.residents = 0
         tile.jobs = 0
@@ -175,29 +187,20 @@ class CityMap:
         return True
 
     def bulldoze(self, x: int, y: int) -> bool:
-        """Bulldoze structures and optionally terrain. Returns True if bulldozed."""
+        """Clear man-made structures first; if already empty, clear non-grass terrain."""
         if not self.in_bounds(x, y):
             return False
         tile = self.get(x, y)
-        
-        # First, clear any man-made structures
         if not tile.is_empty:
             tile.clear()
             return True
-        
-        # If tile is empty but has terrain, clear the terrain to grass
         if tile.terrain != TerrainType.GRASS:
             tile.terrain = TerrainType.GRASS
             return True
-        
-        # Nothing to bulldoze
         return False
 
     def road_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.has_road)
-
-    def zoned_count(self) -> int:
-        return sum(1 for _, _, tile in self.iter_tiles() if tile.zone != ZoneType.EMPTY)
 
     def zone_maintenance_units(self) -> int:
         return sum(
@@ -214,6 +217,23 @@ class CityMap:
 
     def park_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.zone == ZoneType.PARK)
+
+    def recreation_maintenance_cost(self) -> int:
+        total = 0
+        for _, _, tile in self.iter_tiles():
+            if tile.zone == ZoneType.PARK:
+                total += RECREATION_MAINTENANCE.get(tile.recreation_type.value, 3)
+        return total
+
+    def recreation_demand_bonus(self) -> tuple[float, float]:
+        """Returns (residential_bonus, commercial_bonus) summed across all rec tiles."""
+        res_bonus = 0.0
+        com_bonus = 0.0
+        for _, _, tile in self.iter_tiles():
+            if tile.zone == ZoneType.PARK:
+                res_bonus += RECREATION_DEMAND_RES.get(tile.recreation_type.value, 0.5)
+                com_bonus += RECREATION_DEMAND_COM.get(tile.recreation_type.value, 0.0)
+        return res_bonus, com_bonus
 
     def building_count(self, building: BuildingType | None = None) -> int:
         if building is None:

@@ -1,3 +1,4 @@
+"""Procedural map generation — fills the city grid with rivers, lakes, forests, and hills."""
 from __future__ import annotations
 
 import random
@@ -13,12 +14,33 @@ START_AREA_WIDTH = 12
 START_AREA_HEIGHT = 10
 
 
-def generate_terrain(city_map: CityMap, seed: int | None = None) -> None:
+def generate_terrain(city_map: CityMap, seed: int | None = None,
+                     style: str = "default") -> None:
     rng = random.Random(seed)
     _fill_with_grass(city_map)
-    _add_main_water_features(city_map, rng)
-    _add_forests_with_noise(city_map, rng)
-    _add_hills_with_noise(city_map, rng)
+
+    if style == "flat":
+        if city_map.width >= 8 and city_map.height >= 8:
+            _add_lake(city_map, rng)          # one small lake for interest
+        _add_forests_with_noise(city_map, rng)
+        # no hills, no river
+
+    elif style == "hilly":
+        _add_main_water_features(city_map, rng)
+        _add_forests_with_noise(city_map, rng)
+        _add_hills_with_noise(city_map, rng)  # double hill pass
+        _add_hills_with_noise(city_map, rng)
+
+    elif style == "coastal":
+        _add_coastal_water(city_map, rng)
+        _add_forests_with_noise(city_map, rng)
+        _add_hills_with_noise(city_map, rng)
+
+    else:  # "default"
+        _add_main_water_features(city_map, rng)
+        _add_forests_with_noise(city_map, rng)
+        _add_hills_with_noise(city_map, rng)
+
     clear_starter_area(city_map)
 
 
@@ -135,6 +157,20 @@ def _add_forests_with_noise(city_map: CityMap, rng: random.Random) -> None:
                 
                 if distance < threshold and rng.random() < 0.8:
                     tile.terrain = TerrainType.FOREST
+
+
+def _add_coastal_water(city_map: CityMap, rng: random.Random) -> None:
+    """Fill the southern edge of the map with ocean water, fading inland."""
+    coast_depth = max(4, city_map.height // 7)
+    for x in range(city_map.width):
+        for y in range(city_map.height - coast_depth - 3, city_map.height):
+            depth_from_bottom = city_map.height - 1 - y   # 0 at bottom edge, grows inland
+            noise = _simple_noise(x, y, 17) * 3.0
+            if depth_from_bottom < coast_depth * 0.55 + noise:
+                city_map.get(x, y).terrain = TerrainType.WATER
+    # Add a couple of inland lakes for variety
+    for _ in range(rng.randint(1, 2)):
+        _add_lake(city_map, rng)
 
 
 def _add_hills_with_noise(city_map: CityMap, rng: random.Random) -> None:

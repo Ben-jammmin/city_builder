@@ -1,3 +1,4 @@
+"""Core data types — enums, lookup tables, and dataclasses shared across the whole game."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -21,6 +22,18 @@ class ZoneType(Enum):
     PARK = "park"
 
 
+class RecreationType(Enum):
+    PARK = "park"
+    PLAYGROUND = "playground"
+    SPORTS_FIELD = "sports_field"
+    STADIUM = "stadium"
+    GOLF_COURSE = "golf_course"
+    POOL = "pool"
+    CINEMA = "cinema"
+    MUSEUM = "museum"
+    ZOO = "zoo"
+
+
 class TerrainType(Enum):
     GRASS = "grass"
     WATER = "water"
@@ -37,6 +50,7 @@ class BuildingType(Enum):
     POLICE = "police"
     FIRE = "fire"
     SCHOOL = "school"
+    HOSPITAL = "hospital"
     TRAIN_STATION = "train_station"
     AIRPORT = "airport"
 
@@ -58,9 +72,18 @@ class Tool(Enum):
     POLICE = "police"
     FIRE = "fire"
     SCHOOL = "school"
+    HOSPITAL = "hospital"
     TRAIN_STATION = "train_station"
     AIRPORT = "airport"
     PARK = "park"
+    PLAYGROUND = "playground"
+    SPORTS_FIELD = "sports_field"
+    STADIUM = "stadium"
+    GOLF_COURSE = "golf_course"
+    POOL = "pool"
+    CINEMA = "cinema"
+    MUSEUM = "museum"
+    ZOO = "zoo"
     BULLDOZE = "bulldoze"
 
 
@@ -72,6 +95,18 @@ class ViewMode(Enum):
     POLICE = "police"
     TERRAIN = "terrain"
 
+
+RECREATION_LABELS = {
+    RecreationType.PARK: "Park",
+    RecreationType.PLAYGROUND: "Playground",
+    RecreationType.SPORTS_FIELD: "Sports Field",
+    RecreationType.STADIUM: "Stadium",
+    RecreationType.GOLF_COURSE: "Golf Course",
+    RecreationType.POOL: "Pool",
+    RecreationType.CINEMA: "Cinema",
+    RecreationType.MUSEUM: "Museum",
+    RecreationType.ZOO: "Zoo",
+}
 
 ZONE_LABELS = {
     ZoneType.EMPTY: "Empty",
@@ -116,6 +151,7 @@ BUILDING_LABELS = {
     BuildingType.POLICE: "Police",
     BuildingType.FIRE: "Fire",
     BuildingType.SCHOOL: "School",
+    BuildingType.HOSPITAL: "Hospital",
     BuildingType.TRAIN_STATION: "Train Station",
     BuildingType.AIRPORT: "Airport",
 }
@@ -137,9 +173,18 @@ TOOL_LABELS = {
     Tool.POLICE: "Police",
     Tool.FIRE: "Fire",
     Tool.SCHOOL: "School",
+    Tool.HOSPITAL: "Hospital",
     Tool.TRAIN_STATION: "Train Station",
     Tool.AIRPORT: "Airport",
     Tool.PARK: "Park",
+    Tool.PLAYGROUND: "Playground",
+    Tool.SPORTS_FIELD: "Sports Field",
+    Tool.STADIUM: "Stadium",
+    Tool.GOLF_COURSE: "Golf Course",
+    Tool.POOL: "Pool",
+    Tool.CINEMA: "Cinema",
+    Tool.MUSEUM: "Museum",
+    Tool.ZOO: "Zoo",
     Tool.BULLDOZE: "Bulldoze",
 }
 
@@ -170,8 +215,18 @@ MENU_TOOLS = {
         Tool.COMMERCIAL,
         Tool.DENSE_COMMERCIAL,
         Tool.INDUSTRIAL,
-        Tool.PARK,
         Tool.BULLDOZE,
+    ],
+    "Recreation": [
+        Tool.PARK,
+        Tool.PLAYGROUND,
+        Tool.SPORTS_FIELD,
+        Tool.STADIUM,
+        Tool.GOLF_COURSE,
+        Tool.POOL,
+        Tool.CINEMA,
+        Tool.MUSEUM,
+        Tool.ZOO,
     ],
     "Utilities": [
         Tool.ROAD,
@@ -186,6 +241,7 @@ MENU_TOOLS = {
         Tool.POLICE,
         Tool.FIRE,
         Tool.SCHOOL,
+        Tool.HOSPITAL,
         Tool.BULLDOZE,
     ],
     "Transport": [
@@ -195,8 +251,6 @@ MENU_TOOLS = {
 }
 
 MENU_ORDER = list(MENU_TOOLS.keys())
-TOOL_ORDER = [tool for tools in MENU_TOOLS.values() for tool in tools]
-
 TOOL_TO_BUILDING = {
     Tool.POWER_PLANT: BuildingType.POWER_PLANT,
     Tool.LARGE_POWER_PLANT: BuildingType.LARGE_POWER_PLANT,
@@ -205,6 +259,7 @@ TOOL_TO_BUILDING = {
     Tool.POLICE: BuildingType.POLICE,
     Tool.FIRE: BuildingType.FIRE,
     Tool.SCHOOL: BuildingType.SCHOOL,
+    Tool.HOSPITAL: BuildingType.HOSPITAL,
     Tool.TRAIN_STATION: BuildingType.TRAIN_STATION,
     Tool.AIRPORT: BuildingType.AIRPORT,
 }
@@ -216,6 +271,26 @@ TOOL_TO_ZONE = {
     Tool.DENSE_COMMERCIAL: (ZoneType.COMMERCIAL, 2),
     Tool.INDUSTRIAL: (ZoneType.INDUSTRIAL, 1),
     Tool.PARK: (ZoneType.PARK, 1),
+    Tool.PLAYGROUND: (ZoneType.PARK, 1),
+    Tool.SPORTS_FIELD: (ZoneType.PARK, 1),
+    Tool.STADIUM: (ZoneType.PARK, 1),
+    Tool.GOLF_COURSE: (ZoneType.PARK, 1),
+    Tool.POOL: (ZoneType.PARK, 1),
+    Tool.CINEMA: (ZoneType.PARK, 1),
+    Tool.MUSEUM: (ZoneType.PARK, 1),
+    Tool.ZOO: (ZoneType.PARK, 1),
+}
+
+TOOL_TO_RECREATION = {
+    Tool.PARK: RecreationType.PARK,
+    Tool.PLAYGROUND: RecreationType.PLAYGROUND,
+    Tool.SPORTS_FIELD: RecreationType.SPORTS_FIELD,
+    Tool.STADIUM: RecreationType.STADIUM,
+    Tool.GOLF_COURSE: RecreationType.GOLF_COURSE,
+    Tool.POOL: RecreationType.POOL,
+    Tool.CINEMA: RecreationType.CINEMA,
+    Tool.MUSEUM: RecreationType.MUSEUM,
+    Tool.ZOO: RecreationType.ZOO,
 }
 
 POWER_SOURCE_BUILDINGS = {
@@ -241,6 +316,7 @@ class Tile:
     terrain: TerrainType = TerrainType.GRASS
     zone: ZoneType = ZoneType.EMPTY
     zone_level: int = 1
+    recreation_type: RecreationType = RecreationType.PARK
     building: BuildingType = BuildingType.NONE
     has_road: bool = False
     has_power_line: bool = False
@@ -254,8 +330,11 @@ class Tile:
     police_coverage: bool = False
     fire_coverage: bool = False
     education_coverage: bool = False
+    health_coverage: bool = False
     fire_risk: int = 0
+    traffic_load: int = 0
     crime_risk: int = 0
+    on_fire: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -270,6 +349,7 @@ class Tile:
     def clear(self) -> None:
         self.zone = ZoneType.EMPTY
         self.zone_level = 1
+        self.recreation_type = RecreationType.PARK
         self.building = BuildingType.NONE
         self.has_road = False
         self.has_power_line = False
@@ -283,8 +363,11 @@ class Tile:
         self.police_coverage = False
         self.fire_coverage = False
         self.education_coverage = False
+        self.health_coverage = False
         self.fire_risk = 0
+        self.traffic_load = 0
         self.crime_risk = 0
+        self.on_fire = False
 
 
 @dataclass
@@ -307,10 +390,12 @@ class CityStats:
     power_usage: int = 0
     power_satisfaction: int = 0
     unpowered_zones: int = 0
+    powered_tiles: int = 0
     water_capacity: int = 0
     water_usage: int = 0
     water_satisfaction: int = 0
     unwatered_zones: int = 0
+    watered_tiles: int = 0
     service_score: int = 0
     fire_coverage_percent: int = 0
     fire_uncovered_zones: int = 0
@@ -318,8 +403,14 @@ class CityStats:
     police_coverage_percent: int = 0
     police_uncovered_zones: int = 0
     average_crime_risk: int = 0
-    powered_tiles: int = 0
-    watered_tiles: int = 0
+    milestone_pop: int = 0
+    rev_residential: int = 0
+    rev_commercial: int = 0
+    rev_industrial: int = 0
+    exp_roads: int = 0
+    exp_utilities: int = 0
+    exp_buildings: int = 0
+    exp_recreation: int = 0
     messages: list[str] = field(default_factory=lambda: ["Game starts paused. Press Space or Run."])
 
     def clamp_tax_rate(self) -> None:

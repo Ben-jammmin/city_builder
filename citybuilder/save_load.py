@@ -1,3 +1,4 @@
+"""Save and load the game state to/from a JSON file on disk."""
 from __future__ import annotations
 
 import json
@@ -5,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from .city_map import CityMap
-from .models import BuildingType, CityStats, TerrainType, Tile, ZoneType
+from .models import BuildingType, CityStats, RecreationType, TerrainType, Tile, ZoneType
 
-SAVE_VERSION = 3
+SAVE_VERSION = 4
 
 
 def save_game(city_map: CityMap, stats: CityStats, path: str | Path) -> None:
@@ -54,6 +55,7 @@ def tile_to_data(tile: Tile) -> dict[str, Any]:
         "terrain": tile.terrain.value,
         "zone": tile.zone.value,
         "zone_level": tile.zone_level,
+        "recreation_type": tile.recreation_type.value,
         "building": tile.building.value,
         "has_road": tile.has_road,
         "has_power_line": tile.has_power_line,
@@ -72,6 +74,7 @@ def tile_from_data(data: dict[str, Any]) -> Tile:
         terrain=TerrainType(data.get("terrain", TerrainType.GRASS.value)),
         zone=ZoneType(data.get("zone", ZoneType.EMPTY.value)),
         zone_level=data.get("zone_level", 1),
+        recreation_type=RecreationType(data.get("recreation_type", RecreationType.PARK.value)),
         building=BuildingType(data.get("building", BuildingType.NONE.value)),
         has_road=data.get("has_road", False),
         has_power_line=data.get("has_power_line", False),
@@ -116,8 +119,14 @@ def stats_to_data(stats: CityStats) -> dict[str, Any]:
         "police_coverage_percent": stats.police_coverage_percent,
         "police_uncovered_zones": stats.police_uncovered_zones,
         "average_crime_risk": stats.average_crime_risk,
-        "powered_tiles": stats.powered_tiles,
-        "watered_tiles": stats.watered_tiles,
+        "milestone_pop": stats.milestone_pop,
+        "rev_residential": stats.rev_residential,
+        "rev_commercial": stats.rev_commercial,
+        "rev_industrial": stats.rev_industrial,
+        "exp_roads": stats.exp_roads,
+        "exp_utilities": stats.exp_utilities,
+        "exp_buildings": stats.exp_buildings,
+        "exp_recreation": stats.exp_recreation,
         "messages": stats.messages,
     }
 
@@ -153,7 +162,13 @@ def stats_from_data(data: dict[str, Any]) -> CityStats:
         police_coverage_percent=data.get("police_coverage_percent", 0),
         police_uncovered_zones=data.get("police_uncovered_zones", 0),
         average_crime_risk=data.get("average_crime_risk", 0),
-        powered_tiles=data.get("powered_tiles", 0),
-        watered_tiles=data.get("watered_tiles", 0),
+        milestone_pop=data.get("milestone_pop", 0),
+        rev_residential=data.get("rev_residential", 0),
+        rev_commercial=data.get("rev_commercial", 0),
+        rev_industrial=data.get("rev_industrial", 0),
+        exp_roads=data.get("exp_roads", 0),
+        exp_utilities=data.get("exp_utilities", 0),
+        exp_buildings=data.get("exp_buildings", 0),
+        exp_recreation=data.get("exp_recreation", 0),
         messages=data.get("messages", ["Loaded city."]),
     )

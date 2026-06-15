@@ -22,8 +22,22 @@ from .models import (
     BuildingType, TerrainType, Tool, ViewMode, ZoneType,
 )
 from .pedestrian import PedestrianSystem
-from .settings import COLORS, TILE_SIZE
+from .settings import COLORS, DAY_CYCLE_SECONDS, TILE_SIZE
 from .sprites import SpriteAtlas, tile_variant
+
+_MINIMAP_COLOR = {
+    "water":       (40,  80, 130),
+    "forest":      (30,  70,  40),
+    "hill":        (90,  90,  75),
+    "grass":       (50, 100,  50),
+    "road":        (60,  65,  70),
+    "residential": (60, 140,  70),
+    "commercial":  (50, 100, 170),
+    "industrial":  (170, 140, 60),
+    "park":        (40, 160,  80),
+    "fire":        (220,  60,  20),
+    "building":    (140, 120, 100),
+}
 
 
 # Maps BuildingType to the color key in COLORS (settings.py)
@@ -35,6 +49,7 @@ BUILDING_COLOR_KEYS = {
     BuildingType.POLICE:            "police",
     BuildingType.FIRE:              "fire",
     BuildingType.SCHOOL:            "school",
+    BuildingType.HOSPITAL:          "hospital",
     BuildingType.TRAIN_STATION:     "train_station",
     BuildingType.AIRPORT:           "airport",
 }
@@ -57,6 +72,12 @@ class Renderer:
     def __init__(self) -> None:
         self.small_font = pygame.font.SysFont("Segoe UI", 13)
         self.sprites = SpriteAtlas(self.small_font)
+        self._mm_surf: pygame.Surface | None = None
+        self._mm_last_update: int = -9999
+        self._night_overlay: pygame.Surface | None = None
+        self._night_overlay_size: tuple[int, int] = (0, 0)
+        self.minimap_rect: pygame.Rect | None = None
+        self.day_night_enabled: bool = False
 
     def draw_map(
         self,
@@ -117,9 +138,105 @@ class Renderer:
         if pedestrian_system is not None and view_mode == ViewMode.NORMAL:
             self._draw_pedestrians(surface, camera, pedestrian_system, tw, th)
 
+        # Day/night cycle overlay (only when enabled in settings)
+        if self.day_night_enabled:
+            self._draw_day_night(surface, camera.viewport)
+
+        # Minimap in top-right corner
+        self._draw_minimap(surface, city_map, camera)
+
         # Thin border around the map area
         pygame.draw.rect(surface, (20, 24, 28), camera.viewport, width=2)
         surface.set_clip(old_clip)
+
+    # ------------------------------------------------------------------ #
+    # Day/night cycle                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _draw_day_night(self, surface: pygame.Surface, viewport: pygame.Rect) -> None:
+        t = (pygame.time.get_ticks() / (DAY_CYCLE_SECONDS * 1000)) % 1.0
+        if t < 0.30 or t >= 0.92:
+            return  # full daylight
+
+        if t < 0.45:                   # dusk: 0.30 → 0.45
+            p = (t - 0.30) / 0.15
+            col = (int(50 * p), int(20 * p), int(8 * p))
+            alpha = int(90 * p)
+        elif t < 0.75:                  # night: 0.45 → 0.75
+            col = (8, 12, 55)
+            alpha = 130
+        else:                           # dawn: 0.75 → 0.92
+            p = 1.0 - (t - 0.75) / 0.17
+            col = (int(8 * p), int(12 * p), int(55 * p))
+            alpha = int(130 * p)
+
+        sz = (viewport.width, viewport.height)
+        if self._night_overlay is None or self._night_overlay_size != sz:
+            self._night_overlay = pygame.Surface(sz)
+            self._night_overlay_size = sz
+        self._night_overlay.fill(col)
+        self._night_overlay.set_alpha(alpha)
+        surface.blit(self._night_overlay, viewport.topleft)
+
+    # ------------------------------------------------------------------ #
+    # Minimap                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _minimap_tile_color(self, tile) -> tuple:
+        if tile.on_fire:
+            return _MINIMAP_COLOR["fire"]
+        if tile.building.value != "none":
+            return _MINIMAP_COLOR["building"]
+        if tile.has_road:
+            return _MINIMAP_COLOR["road"]
+        if tile.zone.value != "empty":
+            return _MINIMAP_COLOR.get(tile.zone.value, _MINIMAP_COLOR["building"])
+        return _MINIMAP_COLOR.get(tile.terrain.value, _MINIMAP_COLOR["grass"])
+
+    def _draw_minimap(self, surface: pygame.Surface, city_map, camera) -> None:
+        mm_w = min(city_map.width, 128)
+        mm_h = min(city_map.height, 96)
+        vp = camera.viewport
+        mm_x = vp.right - mm_w - 14
+        mm_y = vp.top + 14
+
+        now = pygame.time.get_ticks()
+        if self._mm_surf is None or self._mm_surf.get_size() != (mm_w, mm_h) or now - self._mm_last_update > 2000:
+            self._mm_surf = pygame.Surface((mm_w, mm_h))
+            scale_x = mm_w / city_map.width
+            scale_y = mm_h / city_map.height
+            for mx, my, tile in city_map.iter_tiles():
+                px = int(mx * scale_x)
+                py = int(my * scale_y)
+                self._mm_surf.set_at((min(mm_w - 1, px), min(mm_h - 1, py)), self._minimap_tile_color(tile))
+            self._mm_last_update = now
+
+        pad = 4
+        bg = pygame.Surface((mm_w + pad * 2, mm_h + pad * 2))
+        bg.fill((8, 10, 14))
+        bg.set_alpha(200)
+        surface.blit(bg, (mm_x - pad, mm_y - pad))
+        surface.blit(self._mm_surf, (mm_x, mm_y))
+
+        self.minimap_rect = pygame.Rect(mm_x - pad, mm_y - pad, mm_w + pad * 2, mm_h + pad * 2)
+
+        try:
+            sx, sy, ex, ey = camera.visible_tile_bounds(TILE_SIZE, city_map.width, city_map.height)
+            scale_x = mm_w / city_map.width
+            scale_y = mm_h / city_map.height
+            corners_rot = [(sx, sy), (ex, sy), (ex, ey), (sx, ey)]
+            corners_mm = []
+            for rx, ry in corners_rot:
+                mxc, myc = camera._unapply_rotation(rx, ry)
+                mxc = max(0, min(city_map.width - 1, mxc))
+                myc = max(0, min(city_map.height - 1, myc))
+                corners_mm.append((mm_x + int(mxc * scale_x), mm_y + int(myc * scale_y)))
+            if len(corners_mm) >= 3:
+                pygame.draw.polygon(surface, (255, 255, 255), corners_mm, 1)
+        except Exception:
+            pass
+
+        pygame.draw.rect(surface, (60, 80, 100), (mm_x - pad, mm_y - pad, mm_w + pad * 2, mm_h + pad * 2), 1)
 
     # ------------------------------------------------------------------ #
     # Per-tile drawing                                                     #
@@ -160,14 +277,18 @@ class Renderer:
         elif tile.building != BuildingType.NONE:
             self.sprites.draw_civic_building(surface, cx, cy, tw, th, tile.building, rotation)
         elif tile.zone != ZoneType.EMPTY:
-            self.sprites.draw_zone_base(surface, cx, cy, tw, th, tile.zone, tile.zone_level)
+            rec_type = tile.recreation_type if tile.zone == ZoneType.PARK else None
+            self.sprites.draw_zone_base(surface, cx, cy, tw, th, tile.zone, tile.zone_level, rec_type)
             if tile.development > 0.05:
                 self.sprites.draw_building(
                     surface, cx, cy, tw, th,
                     tile.zone, tile.development, tile.zone_level,
-                    tile_variant(x, y), rotation,
+                    tile_variant(x, y), rotation, rec_type,
                 )
-            self._draw_zone_status_iso(surface, cx, cy, tw, th, tile)
+            if tile.on_fire:
+                self.sprites.draw_fire_overlay(surface, cx, cy, tw, th)
+            else:
+                self._draw_zone_status_iso(surface, cx, cy, tw, th, tile)
 
         # Power lines and water pipes are NOT shown in normal view.
         # Switch to Power or Water view (press V) to see the networks.
@@ -487,6 +608,15 @@ class Renderer:
                 or tile.has_water_pipe
                 or tile.building != BuildingType.NONE
                 or tile.zone == ZoneType.PARK
+            )
+        if active_tool in (Tool.PLAYGROUND, Tool.SPORTS_FIELD, Tool.STADIUM,
+                           Tool.GOLF_COURSE, Tool.POOL, Tool.CINEMA, Tool.MUSEUM, Tool.ZOO):
+            return (
+                tile.terrain != TerrainType.GRASS
+                or tile.has_road
+                or tile.has_power_line
+                or tile.has_water_pipe
+                or tile.building != BuildingType.NONE
             )
         if active_tool == Tool.ROAD:
             return tile.has_road or tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE

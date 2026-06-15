@@ -1,3 +1,4 @@
+"""Loads and caches PNG sprite assets from the assets/ directory."""
 from __future__ import annotations
 
 from pathlib import Path

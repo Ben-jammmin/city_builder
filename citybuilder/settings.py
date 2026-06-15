@@ -1,3 +1,4 @@
+"""All tunable game constants in one place. Adjust values here to balance the simulation."""
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 800
 COMMAND_BAR_HEIGHT = 268
@@ -8,7 +9,7 @@ MAP_WIDTH = 64
 MAP_HEIGHT = 48
 TILE_SIZE = 32
 
-STARTING_MONEY = 25000
+STARTING_MONEY = 50000
 STARTING_YEAR = 1
 STARTING_MONTH = 1
 STARTING_TAX_RATE = 9
@@ -27,6 +28,69 @@ ZONE_COST = {
 PARK_MAINTENANCE = 3
 PARK_LAND_VALUE_BONUS = 0.07
 PARK_DEMAND_BONUS = 0.5
+
+RECREATION_COST = {
+    "park": 150,
+    "playground": 80,
+    "sports_field": 250,
+    "stadium": 3000,
+    "golf_course": 1500,
+    "pool": 400,
+    "cinema": 600,
+    "museum": 1000,
+    "zoo": 2000,
+}
+
+RECREATION_MAINTENANCE = {
+    "park": 3,
+    "playground": 2,
+    "sports_field": 5,
+    "stadium": 80,
+    "golf_course": 40,
+    "pool": 12,
+    "cinema": 20,
+    "museum": 25,
+    "zoo": 50,
+}
+
+RECREATION_LAND_VALUE = {
+    "park": 0.07,
+    "playground": 0.05,
+    "sports_field": 0.06,
+    "stadium": 0.10,
+    "golf_course": 0.14,
+    "pool": 0.07,
+    "cinema": 0.08,
+    "museum": 0.09,
+    "zoo": 0.11,
+}
+
+# Residential demand bonus per recreation tile
+RECREATION_DEMAND_RES = {
+    "park": 0.5,
+    "playground": 0.9,
+    "sports_field": 0.6,
+    "stadium": 0.4,
+    "golf_course": 0.7,
+    "pool": 0.6,
+    "cinema": 0.3,
+    "museum": 0.4,
+    "zoo": 0.8,
+}
+
+# Commercial demand bonus per recreation tile
+RECREATION_DEMAND_COM = {
+    "park": 0.0,
+    "playground": 0.0,
+    "sports_field": 0.3,
+    "stadium": 2.5,
+    "golf_course": 0.5,
+    "pool": 0.3,
+    "cinema": 2.0,
+    "museum": 0.8,
+    "zoo": 1.5,
+}
+# Zone density levels (level 1 = standard, level 2 = dense)
 ZONE_LEVEL_COST_MULTIPLIERS = {
     1: 1.0,
     2: 3.0,
@@ -37,7 +101,7 @@ ZONE_LEVEL_CAPACITY_MULTIPLIERS = {
 }
 ZONE_LEVEL_GROWTH_MULTIPLIERS = {
     1: 1.0,
-    2: 0.85,
+    2: 0.85,  # dense zones grow slower but hold more people
 }
 ZONE_LEVEL_LABELS = {
     1: "Standard",
@@ -63,6 +127,7 @@ BUILDING_COST = {
     "police": 900,
     "fire": 900,
     "school": 1100,
+    "hospital": 1600,
     "train_station": 3000,
     "airport": 5000,
 }
@@ -80,6 +145,7 @@ BUILDING_MAINTENANCE = {
     "police": 35,
     "fire": 35,
     "school": 40,
+    "hospital": 60,
     "train_station": 50,
     "airport": 80,
 }
@@ -88,13 +154,14 @@ POWER_PLANT_CAPACITY = 220
 WATER_TOWER_CAPACITY = 180
 POWER_CAPACITY_BY_BUILDING = {
     "power_plant": POWER_PLANT_CAPACITY,
-    "large_power_plant": 650,
+    "large_power_plant": 2000,
 }
 WATER_CAPACITY_BY_BUILDING = {
     "water_tower": WATER_TOWER_CAPACITY,
-    "large_water_tower": 520,
+    "large_water_tower": 1500,
 }
 SERVICE_RADIUS = 6
+HEALTH_RADIUS = 9
 FIRE_RADIUS = 12
 POLICE_RADIUS = 12
 TRAIN_STATION_RADIUS = 8
@@ -120,9 +187,9 @@ UTILITY_BONUS_MULTIPLIER = 14
 TAX_PENALTY_RESIDENTIAL = 2.0
 TAX_PENALTY_COMMERCIAL = 1.4
 TAX_PENALTY_INDUSTRIAL = 1.1
-RESIDENTIAL_CAPACITY = 10
-COMMERCIAL_CAPACITY = 7
-INDUSTRIAL_CAPACITY = 11
+RESIDENTIAL_CAPACITY = 20
+COMMERCIAL_CAPACITY = 12
+INDUSTRIAL_CAPACITY = 18
 LAND_VALUE_MIN = 0.65
 LAND_VALUE_MAX = 1.25
 SERVICE_COVERAGE_BONUS = 0.04
@@ -159,6 +226,38 @@ PEDESTRIAN_SPAWN_RATE = 0.08
 PEDESTRIAN_MAX_COUNT = 50
 PEDESTRIAN_SPEED = 0.5
 
+EDUCATION_GROWTH_BONUS  = 0.20   # growth rate multiplier for education-covered zones
+HEALTH_GROWTH_BONUS     = 0.15   # growth rate multiplier for hospital-covered zones
+ROAD_TRAFFIC_CAPACITY   = 12     # traffic units before a road is considered congested
+CONGESTION_DEMAND_PENALTY = 1    # commercial demand penalty per congested road tile
+DAY_CYCLE_SECONDS       = 90.0   # real-time seconds per full day/night cycle
+
+# ── Fire disaster ─────────────────────────────────────────────────────────────
+FIRE_UPDATE_INTERVAL    = 0.5    # real-time seconds between fire simulation ticks
+FIRE_IGNITION_PROB      = 0.008  # per uncovered high-risk tile per month
+FIRE_SPREAD_INTERVAL    = 2.0    # real seconds between spread attempts
+FIRE_SPREAD_CHANCE      = 0.30   # chance fire spreads to each adjacent zone tile
+FIRE_BURN_RATE          = 0.05   # development lost per fire tick (~0.1/sec)
+FIRE_SUPPRESS_TIME      = 4.5    # real sec to extinguish with fire station coverage
+FIRE_NATURAL_EXTINGUISH = 18.0   # real sec until fire burns out on its own
+FIRE_EMERGENCY_COST     = 250    # money charged when a fire breaks out
+
+# ── Crime incident ─────────────────────────────────────────────────────────────
+CRIME_INCIDENT_PROB     = 0.012  # per uncovered high-crime tile per month
+CRIME_DAMAGE_RATE       = 0.10   # development set back on incident tile
+CRIME_CLEANUP_COST      = 100    # money charged per crime incident
+
+# ── City milestones ────────────────────────────────────────────────────────────
+# (population_threshold, title, state_grant)
+POPULATION_MILESTONES: list[tuple[int, str, int]] = [
+    (100,     "Hamlet",      1_000),
+    (500,     "Village",     3_000),
+    (2_000,   "Town",       10_000),
+    (10_000,  "City",       35_000),
+    (50_000,  "Metropolis", 120_000),
+    (100_000, "Megalopolis",300_000),
+]
+
 SAVE_FILE = "savegame.json"
 
 # Use the generated transparent isometric PNG pack for buildings, civic buildings,
@@ -191,9 +290,18 @@ COLORS = {
     "police": (74, 109, 184),
     "fire": (211, 84, 70),
     "school": (137, 104, 196),
+    "hospital": (215, 80, 90),
     "train_station": (200, 150, 100),
     "airport": (100, 150, 200),
     "park": (58, 190, 100),
+    "playground": (230, 120, 50),
+    "sports_field": (40, 185, 70),
+    "stadium": (130, 100, 175),
+    "golf_course": (100, 210, 110),
+    "pool": (70, 165, 230),
+    "cinema": (195, 55, 90),
+    "museum": (200, 185, 145),
+    "zoo": (165, 120, 65),
     "pedestrian": (255, 200, 100),
     "service": (122, 201, 148),
     "zone_border": (31, 41, 36),

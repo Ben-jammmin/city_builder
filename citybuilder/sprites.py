@@ -1,3 +1,5 @@
+"""Sprite drawing routines — procedurally generates all tile, building, and road graphics.
+All sprites are cached in SpriteAtlas so each unique combination is only drawn once."""
 from __future__ import annotations
 
 import math
@@ -5,28 +7,32 @@ import math
 import pygame
 
 from .asset_loader import ImageAssetStore
-from .models import BuildingType, TerrainType, ZoneType
+from .models import BuildingType, RecreationType, TerrainType, ZoneType
 from .settings import COLORS, USE_IMAGE_SPRITES
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Small drawing helpers
 # ---------------------------------------------------------------------------
 
 def _s(color: tuple, amt: int) -> tuple:
+    """Shift a colour brighter (positive) or darker (negative), clamped to 0-255."""
     return tuple(max(0, min(255, c + amt)) for c in color)
 
 
 def _lerp(a: int, b: int, t: float) -> int:
+    """Linear interpolation between two integers."""
     return int(a + (b - a) * t)
 
 
 def _diam_pts(tw: int, th: int, oy: int = 0) -> list[tuple[int, int]]:
+    """Four corners of an isometric diamond (north, east, south, west)."""
     hw, hh = tw // 2, th // 2
     return [(hw, oy), (tw, oy + hh), (hw, oy + th), (0, oy + hh)]
 
 
 def tile_variant(x: int, y: int) -> int:
+    """Deterministic 0-3 index so the same tile coordinate always gets the same look."""
     return (x * 37 + y * 17) & 3
 
 
@@ -69,6 +75,43 @@ _BLD_FRACS = {
     ZoneType.PARK:        [0, 0.50, 0.70, 0.90, 1.10],
 }
 
+# Per-recreation-type wall colours (4 variants), roof colours, accent colours
+_REC_WALL = {
+    RecreationType.PARK:         [(62, 138, 76),   (54, 126, 68),   (70, 148, 84),   (58, 132, 72)],
+    RecreationType.PLAYGROUND:   [(210, 105, 50),  (200, 95, 44),   (220, 115, 58),  (205, 100, 48)],
+    RecreationType.SPORTS_FIELD: [(46, 168, 72),   (38, 155, 62),   (54, 178, 80),   (42, 160, 68)],
+    RecreationType.STADIUM:      [(110, 95, 135),  (100, 85, 125),  (120, 105, 145), (105, 90, 130)],
+    RecreationType.GOLF_COURSE:  [(90, 185, 95),   (80, 172, 85),   (100, 196, 105), (85, 178, 90)],
+    RecreationType.POOL:         [(65, 155, 215),  (55, 140, 200),  (75, 168, 228),  (60, 148, 208)],
+    RecreationType.CINEMA:       [(175, 50, 80),   (160, 42, 72),   (188, 58, 88),   (168, 46, 76)],
+    RecreationType.MUSEUM:       [(188, 172, 138), (178, 162, 128), (198, 182, 148), (182, 166, 132)],
+    RecreationType.ZOO:          [(148, 108, 60),  (138, 98, 52),   (158, 118, 68),  (142, 102, 56)],
+}
+
+_REC_ROOF = {
+    RecreationType.PARK:         (42, 105, 58),
+    RecreationType.PLAYGROUND:   (235, 185, 30),
+    RecreationType.SPORTS_FIELD: (30, 140, 55),
+    RecreationType.STADIUM:      (90, 70, 120),
+    RecreationType.GOLF_COURSE:  (68, 158, 72),
+    RecreationType.POOL:         (40, 130, 195),
+    RecreationType.CINEMA:       (140, 30, 60),
+    RecreationType.MUSEUM:       (145, 132, 108),
+    RecreationType.ZOO:          (110, 78, 40),
+}
+
+_REC_BLD_FRACS = {
+    RecreationType.PARK:         [0, 0.50, 0.70, 0.90, 1.10],
+    RecreationType.PLAYGROUND:   [0, 0.55, 0.75, 0.95, 1.15],
+    RecreationType.SPORTS_FIELD: [0, 0.20, 0.28, 0.36, 0.44],
+    RecreationType.STADIUM:      [0, 0.90, 1.30, 1.70, 2.10],
+    RecreationType.GOLF_COURSE:  [0, 0.28, 0.38, 0.48, 0.58],
+    RecreationType.POOL:         [0, 0.28, 0.38, 0.48, 0.58],
+    RecreationType.CINEMA:       [0, 1.00, 1.40, 1.80, 2.20],
+    RecreationType.MUSEUM:       [0, 0.90, 1.25, 1.60, 1.95],
+    RecreationType.ZOO:          [0, 0.45, 0.60, 0.75, 0.90],
+}
+
 _CIVIC_COLOR_KEY = {
     BuildingType.POWER_PLANT:       "power",
     BuildingType.LARGE_POWER_PLANT: "power",
@@ -77,6 +120,7 @@ _CIVIC_COLOR_KEY = {
     BuildingType.POLICE:            "police",
     BuildingType.FIRE:              "fire",
     BuildingType.SCHOOL:            "school",
+    BuildingType.HOSPITAL:          "hospital",
     BuildingType.TRAIN_STATION:     "train_station",
     BuildingType.AIRPORT:           "airport",
 }
@@ -85,6 +129,7 @@ _CIVIC_HEIGHT = {
     BuildingType.POLICE:            1.40,
     BuildingType.FIRE:              1.40,
     BuildingType.SCHOOL:            1.50,
+    BuildingType.HOSPITAL:          1.55,
     BuildingType.POWER_PLANT:       2.00,
     BuildingType.WATER_TOWER:       2.20,
     BuildingType.LARGE_POWER_PLANT: 2.80,
@@ -101,6 +146,7 @@ _CIVIC_LABEL = {
     BuildingType.POLICE:            "Po",
     BuildingType.FIRE:              "Fi",
     BuildingType.SCHOOL:            "Sc",
+    BuildingType.HOSPITAL:          "H+",
     BuildingType.TRAIN_STATION:     "Tr",
     BuildingType.AIRPORT:           "Ap",
 }
@@ -147,9 +193,10 @@ class SpriteAtlas:
         th: int,
         zone: ZoneType,
         level: int,
+        recreation_type: RecreationType | None = None,
     ) -> None:
-        key = ("ZB", zone, level, tw)
-        spr = self._get(key, lambda: self._zone_base_spr(zone, level, tw, th))
+        key = ("ZB", zone, level, tw, recreation_type)
+        spr = self._get(key, lambda: self._zone_base_spr(zone, level, tw, th, recreation_type))
         surface.blit(spr, (cx - tw // 2, cy))
 
     def draw_building(
@@ -164,26 +211,27 @@ class SpriteAtlas:
         level: int = 1,
         variant: int = 0,
         rotation: int = 0,
+        recreation_type: RecreationType | None = None,
     ) -> None:
-        if development < 0.06 or zone not in _BLD_FRACS:
+        if development < 0.06 or (zone not in _BLD_FRACS and zone != ZoneType.PARK):
             return
         stage   = max(1, min(4, int(development * 4) + 1))
         v       = variant & 3
-        asset = self._asset(self._building_asset_name(zone, stage, level, v), tw)
-        if asset is not None:
-            if rotation in (1, 3):
-                flip_key = ("BAF", zone, stage, level, tw, v)
-                asset = self._get(flip_key, lambda: pygame.transform.flip(asset, True, False))
-            self._blit_grounded(surface, asset, cx, cy, th)
-            return
-        bh      = self._bh(zone, stage, level, th)
+        # Image assets only apply to standard zones, not recreation subtypes
+        if zone != ZoneType.PARK or recreation_type is None or recreation_type == RecreationType.PARK:
+            asset = self._asset(self._building_asset_name(zone, stage, level, v), tw)
+            if asset is not None:
+                if rotation in (1, 3):
+                    flip_key = ("BAF", zone, stage, level, tw, v)
+                    asset = self._get(flip_key, lambda: pygame.transform.flip(asset, True, False))
+                self._blit_grounded(surface, asset, cx, cy, th)
+                return
+        bh      = self._bh(zone, stage, level, th, recreation_type)
         extra_h = th // 2
-        key     = ("B", zone, stage, level, tw, th, v)
-        spr     = self._get(key, lambda: self._building_spr(zone, tw, th, bh, stage, level, v, extra_h))
-        # For odd rotations (1 & 3) mirror the building so the visible face
-        # roughly corresponds to what you'd see from that viewing angle.
+        key     = ("B", zone, stage, level, tw, th, v, recreation_type)
+        spr     = self._get(key, lambda: self._building_spr(zone, tw, th, bh, stage, level, v, extra_h, recreation_type))
         if rotation in (1, 3):
-            flip_key = ("BF", zone, stage, level, tw, th, v)
+            flip_key = ("BF", zone, stage, level, tw, th, v, recreation_type)
             spr = self._get(flip_key, lambda: pygame.transform.flip(spr, True, False))
         surface.blit(spr, (cx - tw // 2, cy - bh - extra_h))
 
@@ -577,12 +625,13 @@ class SpriteAtlas:
                 pygame.draw.circle(spr, rock, (rx, ry), max(2, tw // 18))
                 pygame.draw.circle(spr, lit, (rx - 1, ry - 1), max(1, tw // 26))
 
-    def _zone_base_spr(self, zone: ZoneType, level: int, tw: int, th: int) -> pygame.Surface:
+    def _zone_base_spr(self, zone: ZoneType, level: int, tw: int, th: int, recreation_type: RecreationType | None = None) -> pygame.Surface:
         spr = pygame.Surface((tw, th), pygame.SRCALPHA)
         d = _diam_pts(tw, th)
         hw, hh = tw // 2, th // 2
         grass = _GRASS[0]
-        zone_c = COLORS.get(zone.value, (100, 100, 100))
+        color_key = recreation_type.value if (zone == ZoneType.PARK and recreation_type is not None) else zone.value
+        zone_c = COLORS.get(color_key, (100, 100, 100))
         blend = tuple(int(grass[i] * 0.5 + zone_c[i] * 0.5) for i in range(3))
 
         # Directional shading like grass tile
@@ -621,16 +670,22 @@ class SpriteAtlas:
         level: int,
         variant: int,
         extra_h: int,
+        recreation_type: RecreationType | None = None,
     ) -> pygame.Surface:
         surf_h = th + bh + extra_h
         spr = pygame.Surface((tw, surf_h), pygame.SRCALPHA)
         hw, hh = tw // 2, th // 2
         ey = extra_h
 
-        walls = _ZONE_WALL.get(zone, [(150, 150, 150)])
+        if zone == ZoneType.PARK and recreation_type is not None:
+            walls  = _REC_WALL.get(recreation_type, _ZONE_WALL[ZoneType.PARK])
+            roof_c = _REC_ROOF.get(recreation_type, _ZONE_ROOF[ZoneType.PARK])
+            win_c  = _ZONE_WIN[ZoneType.PARK]
+        else:
+            walls  = _ZONE_WALL.get(zone, [(150, 150, 150)])
+            roof_c = _ZONE_ROOF.get(zone, (80, 80, 80))
+            win_c  = _ZONE_WIN.get(zone, (200, 200, 180))
         base_w = walls[variant % len(walls)]
-        roof_c = _ZONE_ROOF.get(zone, (80, 80, 80))
-        win_c  = _ZONE_WIN.get(zone, (200, 200, 180))
         win_dark = _s(win_c, -55)
 
         # Face colours: top brighter, left mid, right dark
@@ -700,7 +755,25 @@ class SpriteAtlas:
         elif zone == ZoneType.INDUSTRIAL:
             self._ind_det(spr, tw, th, bh, hw, hh, stage, variant, ey)
         elif zone == ZoneType.PARK:
-            self._park_det(spr, tw, th, bh, hw, hh, stage, ey)
+            rec = recreation_type or RecreationType.PARK
+            if rec == RecreationType.PARK:
+                self._park_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.PLAYGROUND:
+                self._playground_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.SPORTS_FIELD:
+                self._sports_field_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.STADIUM:
+                self._stadium_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.GOLF_COURSE:
+                self._golf_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.POOL:
+                self._pool_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.CINEMA:
+                self._cinema_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.MUSEUM:
+                self._museum_det(spr, tw, th, bh, hw, hh, stage, ey)
+            elif rec == RecreationType.ZOO:
+                self._zoo_det(spr, tw, th, bh, hw, hh, stage, ey)
         return spr
 
     def _civic_spr(
@@ -1016,6 +1089,363 @@ class SpriteAtlas:
             pygame.draw.circle(spr, tc, (px, py), r_i)
             pygame.draw.circle(spr, hi, (px - r_i // 3, py - r_i // 3), max(1, r_i // 3))
 
+    def _playground_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Slide ramp across top face (NE to SW)
+        slide_c = (220, 70, 50)
+        lw = max(2, tw // 14)
+        pygame.draw.line(spr, slide_c,
+                         (hw + hw // 3, ey + hh // 2),
+                         (hw - hw // 4, th + ey - th // 4), lw)
+        # A-frame swing set sticking above roof
+        if tw >= 14:
+            frame_c = (55, 130, 220)
+            ph = max(4, hh + bh // 3)
+            px1, px2 = hw - tw // 5, hw + tw // 5
+            bar_y = ey - ph
+            pygame.draw.line(spr, frame_c, (px1, ey), (px1, bar_y), max(1, tw // 20))
+            pygame.draw.line(spr, frame_c, (px2, ey), (px2, bar_y), max(1, tw // 20))
+            pygame.draw.line(spr, frame_c, (px1, bar_y), (px2, bar_y), max(1, tw // 20))
+            # Hanging chain + seat
+            if stage >= 2 and tw >= 20:
+                chain_c = (195, 178, 132)
+                seat_y = bar_y + ph // 3
+                pygame.draw.line(spr, chain_c, (hw, bar_y), (hw, seat_y), 1)
+                sw = max(2, tw // 8)
+                pygame.draw.rect(spr, (100, 65, 28),
+                                 pygame.Rect(hw - sw // 2, seat_y, sw, max(1, tw // 22)))
+        # Sandbox patch near base
+        if tw >= 18 and stage >= 2:
+            sand_c = (215, 195, 120)
+            pygame.draw.ellipse(spr, sand_c,
+                                pygame.Rect(hw // 2, th + ey - th // 3, hw, max(2, th // 4)))
+
+    def _sports_field_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # White pitch markings on top face
+        line_c = (240, 240, 240)
+        lw = max(1, tw // 24)
+        # Centre line (west → east across diamond)
+        pygame.draw.line(spr, line_c, (0, hh + ey), (tw, hh + ey), lw)
+        # Centre circle
+        r = max(2, tw // 8)
+        pygame.draw.circle(spr, line_c, (hw, hh + ey), r, lw)
+        # Goal boxes near north and south vertices
+        if tw >= 18:
+            gw = max(2, tw // 5)
+            gh = max(1, th // 5)
+            # North goal
+            ng_pts = [(hw - gw // 2, ey + gh), (hw + gw // 2, ey + gh),
+                      (hw + gw // 2, ey), (hw - gw // 2, ey)]
+            pygame.draw.polygon(spr, line_c, ng_pts, lw)
+            # South goal
+            sg_pts = [(hw - gw // 2, th + ey - gh), (hw + gw // 2, th + ey - gh),
+                      (hw + gw // 2, th + ey), (hw - gw // 2, th + ey)]
+            pygame.draw.polygon(spr, line_c, sg_pts, lw)
+        # Corner flags
+        if tw >= 22 and stage >= 2:
+            flag_c = (230, 60, 60)
+            for fx, fy in ((0, hh + ey), (tw, hh + ey)):
+                ph = max(3, bh + hh)
+                pygame.draw.line(spr, (200, 195, 175), (fx, fy), (fx, fy - ph), max(1, tw // 22))
+                pygame.draw.polygon(spr, flag_c,
+                                    [(fx, fy - ph), (fx + tw // 7, fy - ph + hh // 2), (fx, fy - ph + hh)])
+
+    def _stadium_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Tiered seating lines on both wall faces
+        tier_c = _s((110, 95, 135), 30)
+        n_tiers = max(2, min(5, bh // max(1, th // 3)))
+        lw = max(1, tw // 28)
+        for i in range(1, n_tiers):
+            v = i / n_tiers
+            y_off = int(v * bh)
+            pygame.draw.line(spr, tier_c,
+                             (0,  hh + ey + y_off),
+                             (hw, th + ey + y_off), lw)
+            pygame.draw.line(spr, tier_c,
+                             (hw, th + ey + y_off),
+                             (tw, hh + ey + y_off), lw)
+        # Field on top face (green oval)
+        if tw >= 14:
+            field_c = (38, 148, 58)
+            fw = max(4, tw * 2 // 5)
+            fh = max(2, th * 2 // 5)
+            pygame.draw.ellipse(spr, field_c,
+                                pygame.Rect(hw - fw // 2, hh + ey - fh // 2, fw, fh))
+            if tw >= 22:
+                pygame.draw.ellipse(spr, (240, 240, 240),
+                                    pygame.Rect(hw - fw // 2, hh + ey - fh // 2, fw, fh), 1)
+        # Scoreboard sticking above roof
+        if tw >= 22 and stage >= 2:
+            sb_c = (30, 28, 36)
+            sw, sh = max(4, tw // 5), max(3, hh)
+            sx, sy = hw + hw // 3 - sw // 2, ey - sh - 1
+            pygame.draw.rect(spr, sb_c, pygame.Rect(sx, sy, sw, sh))
+            pygame.draw.rect(spr, (245, 220, 50), pygame.Rect(sx + 1, sy + 1, sw - 2, max(1, sh - 2)), 1)
+
+    def _golf_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Undulating fairway shading on top face
+        fairway_c = (72, 165, 78)
+        rough_c   = (46, 132, 52)
+        pygame.draw.polygon(spr, rough_c,
+                            [(hw, ey), (tw, hh + ey), (hw, th + ey), (0, hh + ey)])
+        # Fairway strip
+        fw = max(4, tw // 3)
+        pygame.draw.ellipse(spr, fairway_c,
+                            pygame.Rect(hw - fw // 2, ey + th // 4, fw, th // 2))
+        # Sand trap (yellow oval near south)
+        if tw >= 14:
+            sand_c = (210, 190, 110)
+            pygame.draw.ellipse(spr, sand_c,
+                                pygame.Rect(hw - tw // 5, th + ey - th // 3, tw // 3, th // 4))
+        # Flag pin
+        ph = max(4, bh + hh)
+        pin_x = hw + hw // 4
+        pin_y = ey + th // 4
+        pygame.draw.line(spr, (195, 185, 165), (pin_x, pin_y), (pin_x, pin_y - ph), max(1, tw // 24))
+        flag_c = (220, 55, 55)
+        fh = max(2, ph // 3)
+        pygame.draw.polygon(spr, flag_c,
+                            [(pin_x, pin_y - ph),
+                             (pin_x + max(3, tw // 7), pin_y - ph + fh // 2),
+                             (pin_x, pin_y - ph + fh)])
+        # Cup
+        pygame.draw.circle(spr, (24, 22, 28), (pin_x, pin_y), max(1, tw // 14))
+
+    def _pool_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Pool water on top face
+        water_c  = (58, 158, 218)
+        lane_c   = (240, 240, 240)
+        edge_c   = (195, 188, 172)
+        # Pool surround
+        pw = max(4, tw * 3 // 5)
+        ph = max(2, th * 2 // 5)
+        px, py = hw - pw // 2, hh + ey - ph // 2
+        pygame.draw.rect(spr, edge_c, pygame.Rect(px - 1, py - 1, pw + 2, ph + 2))
+        pygame.draw.rect(spr, water_c, pygame.Rect(px, py, pw, ph))
+        # Lane dividers
+        n_lanes = max(2, min(5, pw // max(1, tw // 8)))
+        lw = max(1, tw // 32)
+        for i in range(1, n_lanes):
+            lx = px + pw * i // n_lanes
+            pygame.draw.line(spr, lane_c, (lx, py), (lx, py + ph), lw)
+        # Diving board sticking off roof edge
+        if tw >= 18 and stage >= 2:
+            board_c = (188, 172, 130)
+            bx = hw - hw // 2
+            by = ey
+            bl = max(3, tw // 6)
+            pygame.draw.rect(spr, board_c,
+                             pygame.Rect(bx - bl, by - max(2, tw // 18), bl, max(2, tw // 18)))
+
+    def _cinema_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Marquee canopy on left (SW) face, upper portion
+        marquee_c = (235, 215, 55)
+        mh = max(2, bh // 4)
+        marquee_pts = [
+            (0,  hh + ey),
+            (hw, th + ey),
+            (hw, th + ey + mh),
+            (0,  hh + ey + mh),
+        ]
+        pygame.draw.polygon(spr, marquee_c, marquee_pts)
+        # Light bulbs along marquee edge
+        if tw >= 16:
+            bulb_c = (255, 245, 180)
+            n_bulbs = max(2, min(8, tw // 10))
+            for i in range(n_bulbs):
+                t = (i + 0.5) / n_bulbs
+                bx = int(t * hw)
+                by = int(hh + ey + t * hh) + mh // 2
+                pygame.draw.circle(spr, bulb_c, (bx, by), max(1, tw // 24))
+        # Neon sign band on right (SE) face
+        if tw >= 18:
+            neon_c = (205, 55, 90)
+            nh = max(2, bh // 5)
+            neon_pts = [
+                (tw, hh + ey),
+                (hw, th + ey),
+                (hw, th + ey + nh),
+                (tw, hh + ey + nh),
+            ]
+            pygame.draw.polygon(spr, neon_c, neon_pts)
+        # Film reel on roof
+        if tw >= 22 and stage >= 2:
+            reel_c = (28, 25, 35)
+            rr = max(3, tw // 10)
+            rx, ry = hw - hw // 3, ey + hh // 2
+            pygame.draw.circle(spr, reel_c, (rx, ry), rr)
+            pygame.draw.circle(spr, (60, 55, 70), (rx, ry), max(1, rr // 2))
+            for angle_deg in (0, 60, 120):
+                a = math.radians(angle_deg)
+                sx = rx + int(rr * math.cos(a) * 0.7)
+                sy = ry + int(rr * math.sin(a) * 0.7)
+                pygame.draw.circle(spr, reel_c, (sx, sy), max(1, rr // 4))
+
+    def _museum_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Classical columns on left (SW) face
+        col_c   = _s((188, 172, 138), 25)
+        base_c  = _s((188, 172, 138), -20)
+        n_cols  = max(2, min(5, tw // 14))
+        col_w   = max(1, tw // (n_cols * 5))
+        for i in range(n_cols):
+            t = (i + 0.5) / n_cols
+            # Column top on left face at u=t
+            cx_top = int(t * hw)
+            cy_top = int(hh + ey + t * hh)
+            pygame.draw.rect(spr, col_c,
+                             pygame.Rect(cx_top - col_w, cy_top, col_w * 2, bh))
+            # Column base cap
+            pygame.draw.rect(spr, base_c,
+                             pygame.Rect(cx_top - col_w - 1, cy_top, col_w * 2 + 2, max(1, tw // 22)))
+            # Column top cap
+            pygame.draw.rect(spr, base_c,
+                             pygame.Rect(cx_top - col_w - 1, cy_top + bh - max(1, tw // 22),
+                                         col_w * 2 + 2, max(1, tw // 22)))
+        # Triangular pediment above roof (gable end)
+        if tw >= 18:
+            ped_c   = _s((188, 172, 138), 15)
+            ped_h   = max(3, hh)
+            ped_pts = [(0, hh + ey), (hw, hh + ey - ped_h), (tw, hh + ey)]
+            pygame.draw.polygon(spr, ped_c, ped_pts)
+            pygame.draw.polygon(spr, base_c, ped_pts, max(1, tw // 28))
+
+    def _zoo_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 10:
+            return
+        # Enclosure fence posts on top face edges
+        post_c = (158, 132, 82)
+        rail_c = (182, 158, 108)
+        n_posts = max(2, min(6, tw // 12))
+        lw = max(1, tw // 24)
+        # Rail lines along top face edges
+        pygame.draw.line(spr, rail_c, (0, hh + ey), (hw, ey), lw)
+        pygame.draw.line(spr, rail_c, (hw, ey), (tw, hh + ey), lw)
+        for i in range(n_posts + 1):
+            t = i / n_posts
+            # Left edge posts: from West(0, hh+ey) to North(hw, ey)
+            px = int(t * hw)
+            py = int(hh + ey - t * hh)
+            ph = max(3, bh // 2 + hh // 2)
+            pygame.draw.line(spr, post_c, (px, py), (px, py - ph), max(1, tw // 22))
+        # Animal silhouettes (elephant shape) near centre
+        if tw >= 18:
+            body_c = (88, 72, 52)
+            # Body oval
+            bw2 = max(3, tw // 6)
+            bh2 = max(2, th // 5)
+            bx, by = hw - bw2 // 2, hh + ey - bh2 // 2
+            pygame.draw.ellipse(spr, body_c, pygame.Rect(bx, by, bw2, bh2))
+            # Head
+            hr = max(2, bw2 // 3)
+            pygame.draw.circle(spr, body_c, (bx + bw2 + hr // 2, by + bh2 // 3), hr)
+            # Trunk
+            trunk_c = body_c
+            pygame.draw.line(spr, trunk_c,
+                             (bx + bw2 + hr, by + bh2 // 3 + hr // 2),
+                             (bx + bw2 + hr + max(2, tw // 10), by + bh2),
+                             max(1, tw // 20))
+        # Trees at stage 2+
+        if stage >= 2 and tw >= 20:
+            tc = (38, 100, 48)
+            hi = (58, 132, 68)
+            r = max(2, tw // 9)
+            for tx2, ty2 in ((tw * 3 // 4, ey + th // 4), (tw // 5, th * 2 // 3 + ey)):
+                pygame.draw.circle(spr, tc, (tx2, ty2), r)
+                pygame.draw.circle(spr, hi, (tx2 - r // 3, ty2 - r // 3), max(1, r // 3))
+
     def _civic_det(
         self,
         spr: pygame.Surface,
@@ -1072,6 +1502,41 @@ class SpriteAtlas:
             pygame.draw.circle(spr, _s(color, 65),
                                (hw - tank_r // 3, tank_cy - tank_r // 3), max(2, tank_r // 3))
 
+        elif building == BuildingType.HOSPITAL:
+            # Red cross on roof face
+            cross_c = (230, 50, 60)
+            lw = max(2, tw // 12)
+            # Horizontal bar of cross across the diamond top
+            pygame.draw.line(spr, cross_c,
+                             (hw - hw // 3, hh + ey),
+                             (hw + hw // 3, hh + ey), lw)
+            # Vertical bar of cross
+            pygame.draw.line(spr, cross_c,
+                             (hw, hh + ey - hh // 2),
+                             (hw, hh + ey + hh // 2), lw)
+            # White accent outline around cross
+            if tw >= 18:
+                pygame.draw.line(spr, (245, 245, 245),
+                                 (hw - hw // 3, hh + ey),
+                                 (hw + hw // 3, hh + ey), max(1, lw - 1))
+                pygame.draw.line(spr, (245, 245, 245),
+                                 (hw, hh + ey - hh // 2),
+                                 (hw, hh + ey + hh // 2), max(1, lw - 1))
+                pygame.draw.line(spr, cross_c,
+                                 (hw - hw // 4, hh + ey),
+                                 (hw + hw // 4, hh + ey), lw)
+                pygame.draw.line(spr, cross_c,
+                                 (hw, hh + ey - hh // 3),
+                                 (hw, hh + ey + hh // 3), lw)
+            # Helipad circle on left face
+            if tw >= 20 and bh >= 10:
+                hpad_c = (210, 210, 200)
+                hx = hw // 2
+                hy = int(hh + ey + hh * 0.5 + bh * 0.4)
+                hr = max(3, tw // 9)
+                pygame.draw.circle(spr, hpad_c, (hx, hy), hr, max(1, tw // 26))
+                pygame.draw.line(spr, hpad_c, (hx - hr + 2, hy), (hx + hr - 2, hy), max(1, tw // 30))
+
         elif building == BuildingType.AIRPORT:
             # Runway cross
             rwy_c = _s(color, -15)
@@ -1095,8 +1560,11 @@ class SpriteAtlas:
     # Utility helpers                                                      #
     # ------------------------------------------------------------------ #
 
-    def _bh(self, zone: ZoneType, stage: int, level: int, th: int) -> int:
-        fracs = _BLD_FRACS.get(zone, [0, 0.8, 1.2, 1.8, 2.4])
+    def _bh(self, zone: ZoneType, stage: int, level: int, th: int, recreation_type: RecreationType | None = None) -> int:
+        if zone == ZoneType.PARK and recreation_type is not None:
+            fracs = _REC_BLD_FRACS.get(recreation_type, _BLD_FRACS[ZoneType.PARK])
+        else:
+            fracs = _BLD_FRACS.get(zone, [0, 0.8, 1.2, 1.8, 2.4])
         frac = fracs[min(stage, len(fracs) - 1)]
         mult = 1.5 if level > 1 else 1.0
         return max(4, int(th * frac * mult))
@@ -1123,6 +1591,42 @@ class SpriteAtlas:
 
     def _blit_grounded(self, surface: pygame.Surface, sprite: pygame.Surface, cx: int, cy: int, th: int) -> None:
         surface.blit(sprite, (cx - sprite.get_width() // 2, cy + th - sprite.get_height()))
+
+    def draw_fire_overlay(
+        self, surface: pygame.Surface, cx: int, cy: int, tw: int, th: int
+    ) -> None:
+        """Draw an animated fire over a burning tile (drawn directly, not cached)."""
+        hw, hh = tw // 2, th // 2
+        t = pygame.time.get_ticks()
+        phase = (t // 220) % 2
+
+        # Base: orange-red diamond covering the tile
+        base_col = (210, 55, 10) if phase == 0 else (230, 90, 18)
+        pts_diamond = [
+            (cx,      cy),
+            (cx + hw, cy + hh),
+            (cx,      cy + th),
+            (cx - hw, cy + hh),
+        ]
+        pygame.draw.polygon(surface, base_col, pts_diamond)
+
+        # Bright outline
+        pygame.draw.polygon(surface, (255, 200, 40), pts_diamond, max(1, tw // 18))
+
+        # Flame tongues rising above the tile centre
+        flame_h = max(3, int(th * (1.1 if phase == 0 else 0.8)))
+        tip_col  = (255, 230, 60) if phase == 0 else (255, 150, 20)
+        fw       = max(2, tw // 6)
+
+        for ox in (-hw // 3, 0, hw // 3):
+            bx = cx + ox
+            by = cy + hh // 3
+            fh = flame_h + (tw // 6 if ox == 0 else 0)
+            pygame.draw.polygon(surface, tip_col, [
+                (bx - fw, by),
+                (bx,      by - fh),
+                (bx + fw, by),
+            ])
 
     def _get(self, key: tuple, maker) -> pygame.Surface:
         if key not in self.cache:

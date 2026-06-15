@@ -1,9 +1,10 @@
+"""The sidebar — the bottom bar with city stats, controls, menus, and tool buttons."""
 from __future__ import annotations
 
 import pygame
 
 from .city_map import CityMap
-from .models import BUILDING_LABELS, TERRAIN_LABELS, TOOL_LABELS, Tool, ViewMode, ZoneType
+from .models import TOOL_LABELS, Tool, ViewMode
 from .settings import (
     COLORS,
     COMMAND_BAR_HEIGHT,
@@ -184,7 +185,7 @@ class Sidebar:
         self.panels._button(surface, self.minimize_rect, "Show")
 
     def _draw_tile_compact(self, surface: pygame.Surface, city_map: CityMap, hover_tile, x: int, y: int, width: int) -> int:
-        panel_h = 96
+        panel_h = 116
         panel = self.panels._panel(surface, x, y, width, panel_h)
         self.panels._draw_text(surface, "Tile", panel.x + 10, panel.y + 8, self.font)
         if hover_tile is None:
@@ -194,10 +195,10 @@ class Sidebar:
         tx, ty = hover_tile
         tile = city_map.get(tx, ty)
         kind = self._tile_kind(tile)
-        self.panels._draw_text(surface, fit_label(f"{tx}, {ty}  {kind}", self.font_small, width - 20), panel.x + 10, panel.y + 32, self.font_small)
+        self.panels._draw_text(surface, fit_label(f"{tx},{ty} {kind}", self.font_small, width - 20), panel.x + 10, panel.y + 32, self.font_small)
         self.panels._draw_text(
             surface,
-            fit_label(f"{TERRAIN_LABELS[tile.terrain]}  Dev {tile.development:.0%}  Value {tile.land_value:.2f}", self.font_small, width - 20),
+            fit_label(f"Dev {tile.development:.0%}  Val {tile.land_value:.2f}", self.font_small, width - 20),
             panel.x + 10,
             panel.y + 50,
             self.font_small,
@@ -211,6 +212,8 @@ class Sidebar:
             self.font_small,
             COLORS["muted_text"],
         )
+        status, status_color = self.panels._tile_status(tile, city_map, tx, ty)
+        self.panels._draw_text(surface, fit_label(status, self.font_small, width - 20), panel.x + 10, panel.y + 88, self.font_small, status_color)
         return panel.bottom
 
     def _draw_advisor_compact(self, surface: pygame.Surface, stats, x: int, y: int, width: int, height: int) -> int:
@@ -227,18 +230,7 @@ class Sidebar:
         return panel.bottom
 
     def _tile_kind(self, tile) -> str:
-        if tile.building.value != "none":
-            return BUILDING_LABELS[tile.building]
-        if tile.has_road:
-            return "Road"
-        if tile.has_power_line:
-            return "Power Line"
-        if tile.has_water_pipe:
-            return "Water Pipe"
-        if tile.zone != ZoneType.EMPTY:
-            prefix = "Dense " if tile.zone_level > 1 else ""
-            return f"{prefix}{tile.zone.value.title()}"
-        return "Empty"
+        return self.panels._tile_kind(tile)
 
     def _reset_click_targets(self) -> None:
         self.menu_buttons.clear()
@@ -257,5 +249,3 @@ class Sidebar:
     def _clamp_scroll(self) -> None:
         self.scroll_offset = max(0, min(self.scroll_offset, self._max_scroll()))
 
-    def _fit_label(self, label: str, font: pygame.font.Font, max_width: int) -> str:
-        return fit_label(label, font, max_width)
