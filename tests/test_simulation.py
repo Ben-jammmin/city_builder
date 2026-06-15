@@ -52,6 +52,19 @@ class SimulationTests(unittest.TestCase):
         self.assertTrue(tile.powered)
         self.assertTrue(tile.watered)
 
+    def test_zone_growth_takes_more_than_one_year_to_max_out(self) -> None:
+        city_map = CityMap(5, 5)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        self.add_basic_power_and_water(city_map)
+        city_map.place_zone(1, 2, ZoneType.RESIDENTIAL)
+
+        for _ in range(12):
+            simulation.simulate_month()
+
+        self.assertGreater(city_map.get(1, 2).development, 0.0)
+        self.assertLess(city_map.get(1, 2).development, 1.0)
+
     def test_road_without_utilities_does_not_grow_zone(self) -> None:
         city_map = CityMap(4, 4)
         stats = CityStats()
@@ -299,6 +312,32 @@ class SimulationTests(unittest.TestCase):
 
         self.assertEqual(stats.fire_uncovered_zones, 1)
         self.assertIn("outside fire station coverage", stats.messages[-1])
+
+    def test_advisor_reports_multiple_active_issues(self) -> None:
+        city_map = CityMap(3, 3)
+        stats = CityStats(messages=[])
+        simulation = Simulation(city_map, stats)
+        stats.power_capacity = 100
+        stats.water_capacity = 100
+        stats.unpowered_zones = 2
+        stats.unwatered_zones = 3
+        stats.fire_uncovered_zones = 4
+
+        simulation._add_monthly_message(revenue=0, expenses=100)
+
+        self.assertIn("Some zones are not connected to power.", stats.messages)
+        self.assertIn("Some zones are not connected to water.", stats.messages)
+        self.assertIn("Some zones are outside fire station coverage.", stats.messages)
+        self.assertEqual(stats.messages[-1], "Some zones are not connected to power.")
+
+    def test_parks_do_not_report_fire_or_crime_risk(self) -> None:
+        city_map = CityMap(3, 3)
+        stats = CityStats()
+        simulation = Simulation(city_map, stats)
+        city_map.place_zone(1, 1, ZoneType.PARK)
+
+        self.assertEqual(simulation._fire_risk_for(1, 1), 0)
+        self.assertEqual(simulation._crime_risk_for(1, 1), 0)
 
     def test_police_station_reports_covered_and_uncovered_zones(self) -> None:
         city_map = CityMap(12, 12)

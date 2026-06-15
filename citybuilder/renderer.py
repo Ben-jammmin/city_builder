@@ -84,6 +84,12 @@ class Renderer:
         tw = max(4, int(camera.tile_w * camera.zoom))
         th = max(2, int(camera.tile_h * camera.zoom))
 
+        utility_network: set[tuple[int, int]] | None = None
+        if view_mode == ViewMode.POWER:
+            utility_network = self._connected_utility_network(city_map, POWER_SOURCE_BUILDINGS, "has_power_line")
+        elif view_mode == ViewMode.WATER:
+            utility_network = self._connected_utility_network(city_map, WATER_SOURCE_BUILDINGS, "has_water_pipe")
+
         # Only draw tiles that are actually visible on screen
         start_x, start_y, end_x, end_y = camera.visible_tile_bounds(
             TILE_SIZE, city_map.width, city_map.height
@@ -99,7 +105,7 @@ class Renderer:
                 continue
             tile = city_map.get(mx, my)
             cx, cy = camera.world_to_screen(mx, my)
-            self._draw_tile(surface, city_map, tile, mx, my, cx, cy, tw, th, view_mode, rot)
+            self._draw_tile(surface, city_map, tile, mx, my, cx, cy, tw, th, view_mode, rot, utility_network)
 
         # Draw hover highlight over the tile under the mouse cursor
         if hover_tile and city_map.in_bounds(*hover_tile):
@@ -132,6 +138,7 @@ class Renderer:
         th: int,
         view_mode: ViewMode,
         rotation: int = 0,
+        utility_network: set[tuple[int, int]] | None = None,
     ) -> None:
         """Draw one tile: terrain first, then whatever sits on top of it."""
 
@@ -143,7 +150,7 @@ class Renderer:
 
         # Special view modes (power, water, fire, police) get their own overlay
         if view_mode != ViewMode.NORMAL:
-            self._draw_view_overlay(surface, city_map, tile, x, y, cx, cy, tw, th, view_mode, rotation)
+            self._draw_view_overlay(surface, city_map, tile, x, y, cx, cy, tw, th, view_mode, rotation, utility_network)
             return
 
         # --- Normal view ---
@@ -178,6 +185,7 @@ class Renderer:
         th: int,
         view_mode: ViewMode,
         rotation: int = 0,
+        utility_network: set[tuple[int, int]] | None = None,
     ) -> None:
         """
         Draw tile contents for a special view mode (power, water, fire, police).
@@ -199,25 +207,31 @@ class Renderer:
             if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK):
                 c = (92, 82, 50, 138) if tile.powered else (120, 55, 55, 138)
                 self._draw_diam_overlay(surface, cx, cy, tw, th, c)
+                if not tile.powered:
+                    self._draw_status_badge(surface, (cx, cy + th // 2), COLORS["power"], "power", tw)
             if tile.building in POWER_SOURCE_BUILDINGS:
                 self.sprites.draw_civic_building(surface, cx, cy, tw, th, tile.building, rotation)
             elif tile.building != BuildingType.NONE:
                 self._draw_marker_dot(surface, cx, cy, tw, th, tile.building)
             if tile.has_power_line:
                 conn = _rotate_connections(city_map.power_connections(x, y), rotation)
-                self._draw_power_line_iso(surface, cx, cy, tw, th, conn)
+                connected = utility_network is not None and (x, y) in utility_network
+                self._draw_power_line_iso(surface, cx, cy, tw, th, conn, connected)
 
         elif view_mode == ViewMode.WATER:
             if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK):
                 c = (45, 80, 100, 138) if tile.watered else (110, 58, 58, 138)
                 self._draw_diam_overlay(surface, cx, cy, tw, th, c)
+                if not tile.watered:
+                    self._draw_status_badge(surface, (cx, cy + th // 2), COLORS["water"], "water", tw)
             if tile.building in WATER_SOURCE_BUILDINGS:
                 self.sprites.draw_civic_building(surface, cx, cy, tw, th, tile.building, rotation)
             elif tile.building != BuildingType.NONE:
                 self._draw_marker_dot(surface, cx, cy, tw, th, tile.building)
             if tile.has_water_pipe:
                 conn = _rotate_connections(city_map.water_connections(x, y), rotation)
-                self._draw_water_pipe_iso(surface, cx, cy, tw, th, conn)
+                connected = utility_network is not None and (x, y) in utility_network
+                self._draw_water_pipe_iso(surface, cx, cy, tw, th, conn, connected)
 
         elif view_mode == ViewMode.FIRE:
             if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK):
@@ -380,15 +394,18 @@ class Renderer:
         cx: int, cy: int,
         tw: int, th: int,
         connections: dict,
+        connected: bool = True,
     ) -> None:
         """Draw the power line pole and wires for a single tile."""
         hw, hh   = tw // 2, th // 2
         center   = (cx, cy + hh)
         pole_h   = max(3, th // 2)
         pole_top = (cx, cy + hh - pole_h)
-        pole_c   = (220, 200, 90)
+        pole_c   = (230, 210, 80) if connected else (226, 96, 84)
+        shadow_c = (74, 59, 42) if connected else (92, 45, 43)
         lw       = max(1, tw // 20)
 
+        pygame.draw.line(surface, shadow_c, (center[0] + 1, center[1] + 1), (pole_top[0] + 1, pole_top[1] + 1), lw + 1)
         pygame.draw.line(surface, pole_c, center, pole_top, lw)
 
         # Wire attachment points at the midpoint of each diamond edge
@@ -400,7 +417,10 @@ class Renderer:
         }
         for direction, ep in edge_mids.items():
             if connections.get(direction, False):
+                pygame.draw.line(surface, shadow_c, (pole_top[0] + 1, pole_top[1] + 1), (ep[0] + 1, ep[1] + 1), max(1, tw // 28) + 1)
                 pygame.draw.line(surface, pole_c, pole_top, ep, max(1, tw // 28))
+        if not connected and tw >= 18:
+            self._draw_status_badge(surface, (cx, cy + hh), (226, 96, 84), "power", tw)
 
     def _draw_water_pipe_iso(
         self,
@@ -408,14 +428,17 @@ class Renderer:
         cx: int, cy: int,
         tw: int, th: int,
         connections: dict,
+        connected: bool = True,
     ) -> None:
         """Draw the water pipe node and segments for a single tile."""
         hw, hh  = tw // 2, th // 2
         center  = (cx, cy + hh)
-        pipe_c  = (65, 155, 205)
+        pipe_c  = (80, 178, 230) if connected else (226, 96, 84)
+        shadow_c = (35, 82, 108) if connected else (92, 45, 43)
         lw      = max(1, tw // 18)
         r       = max(2, tw // 14)
 
+        pygame.draw.circle(surface, shadow_c, (center[0] + 1, center[1] + 1), r + 1)
         pygame.draw.circle(surface, pipe_c, center, r)
 
         edge_mids = {
@@ -426,7 +449,10 @@ class Renderer:
         }
         for direction, ep in edge_mids.items():
             if connections.get(direction, False):
+                pygame.draw.line(surface, shadow_c, (center[0] + 1, center[1] + 1), (ep[0] + 1, ep[1] + 1), lw + 1)
                 pygame.draw.line(surface, pipe_c, center, ep, lw)
+        if not connected and tw >= 18:
+            self._draw_status_badge(surface, (cx, cy + hh), (226, 96, 84), "water", tw)
 
     def _risk_color_iso(self, risk: int, covered: bool) -> tuple:
         """Return an RGBA overlay color for a fire/crime risk level."""
@@ -463,7 +489,7 @@ class Renderer:
                 or tile.zone == ZoneType.PARK
             )
         if active_tool == Tool.ROAD:
-            return tile.has_road
+            return tile.has_road or tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE
         if active_tool == Tool.POWER_LINE:
             return (tile.has_power_line
                     or tile.zone != ZoneType.EMPTY
@@ -475,6 +501,31 @@ class Renderer:
         if active_tool in TOOL_TO_BUILDING:
             return tile.terrain != TerrainType.GRASS or not tile.is_empty
         return False
+
+    def _connected_utility_network(
+        self,
+        city_map: CityMap,
+        source_buildings: set[BuildingType],
+        line_attr: str,
+    ) -> set[tuple[int, int]]:
+        starts = [
+            (x, y)
+            for x, y, tile in city_map.iter_tiles()
+            if tile.building in source_buildings
+        ]
+        network = set(starts)
+        frontier = list(starts)
+
+        while frontier:
+            x, y = frontier.pop()
+            for nx, ny, neighbor in city_map.neighbors4(x, y):
+                if (nx, ny) in network:
+                    continue
+                if getattr(neighbor, line_attr) or neighbor.building in source_buildings:
+                    network.add((nx, ny))
+                    frontier.append((nx, ny))
+
+        return network
 
     def _draw_pedestrians(
         self,

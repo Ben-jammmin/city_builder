@@ -30,6 +30,20 @@ The tests use Python's built-in `unittest` module, so there is no extra test dep
 python -B -m unittest discover
 ```
 
+To run a Codex-friendly smoke test of the real Pygame game loop pieces, use:
+
+```powershell
+python -B tools/codex_smoke_test.py
+```
+
+To also save screenshots for visual inspection, pass an output folder:
+
+```powershell
+python -B tools/codex_smoke_test.py --screenshots smoke_screenshots
+```
+
+This uses SDL's dummy display so Codex can instantiate the actual game, click command bar menus, place every build tool, minimize/restore the menu, bulldoze tiles, zoom, resize, render views, simulate months, test save/load, and optionally capture screenshots without opening a window or touching your real `savegame.json`.
+
 ## System notes
 
 For beginner-friendly notes on how each system works and how to improve it, read:
@@ -75,8 +89,8 @@ docs/SYSTEM_NOTES.md
 Press `V` to cycle through system views:
 
 - `Normal`: full city view with roads, zones, buildings, utilities, and warnings
-- `Power`: shows power plants, power lines, powered zones, and unpowered zones
-- `Water`: shows water towers, water pipes, watered zones, and unwatered zones
+- `Power`: shows power plants, power lines, powered zones, and unpowered zones. Connected lines draw bright yellow; disconnected/orphaned lines draw red.
+- `Water`: shows water towers, water pipes, watered zones, and unwatered zones. Connected pipes draw bright blue; disconnected/orphaned pipes draw red.
 - `Fire`: shows fire stations, fire coverage, and fire risk
 - `Police`: shows police stations, police coverage, and crime risk
 - `Terrain`: shows grass, water, forests, hills, and light city context
@@ -85,9 +99,13 @@ System views keep faint roads and small markers for every service building visib
 
 ## Sprite assets
 
-The game now supports optional PNG sprites. It still runs with no image files because procedural sprites are used as a fallback.
+The game uses transparent PNG sprites for buildings, civic buildings, and pedestrians. It still runs with no image files because procedural isometric sprites are used as a fallback.
 
-To replace the generated art, add square PNGs under `assets/`. See `assets/README.md` for the exact filenames for terrain, roads, zones, buildings, utilities, and pedestrians.
+The current generated PNG pack follows the original transparent 2:1 isometric style guide. For a richer late-90s city-builder direction, keep new art aligned to:
+
+```text
+docs/SPRITE_STYLE_GUIDE.md
+```
 
 The included starter pack can be regenerated with:
 
@@ -95,9 +113,9 @@ The included starter pack can be regenerated with:
 python -B tools/generate_pixel_assets.py
 ```
 
-## Menus and panels
+## Command bar
 
-The right sidebar has four tool menus:
+The bottom command bar has four tool menus and can be hidden with `Hide`:
 
 - `Zones`: inspect, residential, commercial, industrial, bulldoze
 - `Utilities`: roads, power lines, water pipes, power plants, water towers
@@ -113,6 +131,8 @@ It also shows:
 - service coverage score
 - selected tile details
 - advisor messages
+
+When minimized, the bar shrinks to a slim status strip with a `Show` button and the map viewport expands.
 
 The `Zones` menu includes standard and dense residential/commercial zones. Dense zones cost more to place and grow a little slower, but they support more residents or jobs once developed.
 
@@ -166,7 +186,7 @@ The code is split into beginner-friendly modules:
 - `citybuilder/renderer.py`: map drawing
 - `citybuilder/sprites.py`: generated sprite-style tile art and asset naming
 - `citybuilder/asset_loader.py`: optional PNG sprite loading and scaling
-- `citybuilder/ui.py`: sidebar and HUD
+- `citybuilder/ui.py`: bottom command bar and HUD
 - `citybuilder/pedestrian.py`: simple pedestrian movement
 - `citybuilder/terrain.py`: simple terrain generation
 - `citybuilder/models.py`: shared data classes and enums

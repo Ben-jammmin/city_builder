@@ -28,6 +28,7 @@ from .settings import (
     BUILDING_COST,
     BULLDOZE_COST,
     COLORS,
+    COMMAND_BAR_HEIGHT,
     FPS,
     MAP_HEIGHT,
     MAP_WIDTH,
@@ -36,7 +37,6 @@ from .settings import (
     POWER_LINE_COST,
     ROAD_COST,
     SAVE_FILE,
-    SIDEBAR_WIDTH,
     SIM_SECONDS_PER_MONTH,
     TERRAIN_CLEAR_COSTS,
     TILE_SIZE,
@@ -67,7 +67,7 @@ class Game:
         self.stats = CityStats()
         self.simulation = Simulation(self.map, self.stats)
         self.pedestrian_system = PedestrianSystem(max_count=PEDESTRIAN_MAX_COUNT)
-        viewport = pygame.Rect(0, 0, self.windowed_size[0] - SIDEBAR_WIDTH, self.windowed_size[1])
+        viewport = pygame.Rect(0, 0, self.windowed_size[0], self.windowed_size[1] - COMMAND_BAR_HEIGHT)
         self.camera = Camera(MAP_WIDTH * TILE_SIZE, MAP_HEIGHT * TILE_SIZE, viewport)
         self.renderer = Renderer()
         self.sidebar = Sidebar()
@@ -184,9 +184,9 @@ class Game:
             return display_info.current_w, display_info.current_h
 
     def _resize_layout(self, width: int, height: int) -> None:
-        map_width = max(240, width - SIDEBAR_WIDTH)
-        self.camera.set_viewport(pygame.Rect(0, 0, map_width, height))
         self.sidebar.set_screen_size(width, height)
+        map_height = max(240, height - self.sidebar.current_height())
+        self.camera.set_viewport(pygame.Rect(0, 0, width, map_height))
 
     def _handle_mouse_down(self, event: pygame.event.Event) -> None:
         self.last_mouse_pos = event.pos
@@ -243,6 +243,9 @@ class Game:
             self._save_game()
         elif kind == "load":
             self._load_game()
+        elif kind == "toggle_menu":
+            self.sidebar.minimized = not self.sidebar.minimized
+            self._resize_layout(*self.screen.get_size())
 
     def _handle_keyboard_camera(self, dt: float) -> None:
         keys = pygame.key.get_pressed()
@@ -301,6 +304,7 @@ class Game:
         if self.map.place_zone(*tile_pos, zone, level):
             self.stats.money -= cost
             self.stats.add_message(f"Zoned {self._zone_label(zone, level)} for ${cost}.")
+            self._refresh_city_status()
         else:
             self._add_zone_blocked_message(tile_pos, zone, level)
 
@@ -336,12 +340,15 @@ class Game:
         if self.map.place_road(*tile_pos):
             self.stats.money -= ROAD_COST
             self.stats.add_message(f"Built road for ${ROAD_COST}.")
+            self._refresh_city_status()
         else:
             x, y = tile_pos
             if self.map.is_water(x, y):
                 self.stats.add_message("Cannot build road on water.")
             elif self.map.get(x, y).has_road:
                 self.stats.add_message("Road already exists.")
+            elif self.map.get(x, y).zone != ZoneType.EMPTY or self.map.get(x, y).building != BuildingType.NONE:
+                self.stats.add_message("Tile occupied by zone/building.")
             else:
                 self.stats.add_message("Cannot place road.")
 
@@ -351,6 +358,7 @@ class Game:
         if self.map.place_power_line(*tile_pos):
             self.stats.money -= POWER_LINE_COST
             self.stats.add_message(f"Built power line for ${POWER_LINE_COST}.")
+            self._refresh_city_status()
         else:
             x, y = tile_pos
             if self.map.is_water(x, y):
@@ -368,6 +376,7 @@ class Game:
         if self.map.place_water_pipe(*tile_pos):
             self.stats.money -= WATER_PIPE_COST
             self.stats.add_message(f"Built water pipe for ${WATER_PIPE_COST}.")
+            self._refresh_city_status()
         else:
             x, y = tile_pos
             if self.map.is_water(x, y):
@@ -387,6 +396,7 @@ class Game:
         if self.map.place_building(*tile_pos, building):
             self.stats.money -= cost
             self.stats.add_message(f"Built {TOOL_LABELS[self.active_tool]} for ${cost}.")
+            self._refresh_city_status()
         else:
             x, y = tile_pos
             tile = self.map.get(x, y)
@@ -424,6 +434,7 @@ class Game:
         if self.map.bulldoze(*tile_pos):
             self.stats.money -= cost
             self.stats.add_message(f"Cleared {item_name} for ${cost}.")
+            self._refresh_city_status()
 
     def _save_game(self) -> None:
         save_game(self.map, self.stats, self.save_path)
@@ -435,6 +446,7 @@ class Game:
             return
         self.map, self.stats = load_game(self.save_path)
         self.simulation = Simulation(self.map, self.stats)
+        self._refresh_city_status()
         self.stats.add_message(f"Loaded {self.save_path.name}.")
 
     def _can_afford(self, cost: int) -> bool:
@@ -442,6 +454,11 @@ class Game:
             self.stats.add_message(f"Not enough money for ${cost} action.")
             return False
         return True
+
+    def _refresh_city_status(self) -> None:
+        simulation = getattr(self, "simulation", None)
+        if simulation is not None:
+            simulation.refresh_systems()
 
     def _mouse_tile(self, pos: tuple[int, int]) -> tuple[int, int] | None:
         tile_pos = self.camera.screen_to_tile(pos, TILE_SIZE)

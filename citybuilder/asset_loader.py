@@ -27,10 +27,12 @@ class ImageAssetStore:
             return None
 
         try:
-            if raw.get_size() == (size, size):
+            raw_width, raw_height = raw.get_size()
+            target_height = max(1, round(raw_height * (size / raw_width)))
+            if raw.get_size() == (size, target_height):
                 sprite = raw.copy()
             else:
-                sprite = pygame.transform.scale(raw, (size, size))
+                sprite = pygame.transform.scale(raw, (size, target_height))
         except Exception:
             sprite = None
 

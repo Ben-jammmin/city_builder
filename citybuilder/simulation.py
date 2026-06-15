@@ -82,6 +82,21 @@ class Simulation:
         self.stats = stats
         self.elapsed = 0.0
 
+    def refresh_systems(self) -> None:
+        """Refresh sidebar-facing city systems without advancing the calendar."""
+        self._update_systems()
+        for x, y, tile in self.city_map.iter_tiles():
+            if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
+                tile.land_value = 1.0
+                tile.fire_risk = 0
+                tile.crime_risk = 0
+                continue
+            tile.land_value = self._land_value_for(x, y)
+            tile.fire_risk = self._fire_risk_for(x, y)
+            tile.crime_risk = self._crime_risk_for(x, y)
+        self._update_system_totals()
+        self._update_demand()
+
     def update(self, dt: float, seconds_per_month: float) -> None:
         if self.stats.paused:
             return
@@ -219,7 +234,7 @@ class Simulation:
 
     def _fire_risk_for(self, x: int, y: int) -> int:
         tile = self.city_map.get(x, y)
-        if tile.zone == ZoneType.EMPTY:
+        if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
             return 0
 
         risk = FIRE_RISK_BASE + int(tile.development * FIRE_RISK_DEVELOPMENT_FACTOR)
@@ -248,7 +263,7 @@ class Simulation:
 
     def _crime_risk_for(self, x: int, y: int) -> int:
         tile = self.city_map.get(x, y)
-        if tile.zone == ZoneType.EMPTY:
+        if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
             return 0
 
         risk = CRIME_RISK_BASE + int(tile.development * CRIME_RISK_DEVELOPMENT_FACTOR)
@@ -458,32 +473,39 @@ class Simulation:
         return max(0, min(100, int(value)))
 
     def _add_monthly_message(self, revenue: int, expenses: int) -> None:
+        messages: list[str] = []
         if self.stats.money < 0:
-            self.stats.add_message("Budget is negative. Raise taxes or slow building.")
-        elif self.stats.power_capacity == 0:
-            self.stats.add_message("Build a power plant and power lines.")
-        elif self.stats.unpowered_zones > 0:
-            self.stats.add_message("Some zones are not connected to power.")
-        elif self.stats.water_capacity == 0:
-            self.stats.add_message("Build a water tower and water pipes.")
-        elif self.stats.unwatered_zones > 0:
-            self.stats.add_message("Some zones are not connected to water.")
-        elif self.stats.power_usage > self.stats.power_capacity:
-            self.stats.add_message("Power demand is higher than capacity.")
-        elif self.stats.water_usage > self.stats.water_capacity:
-            self.stats.add_message("Water demand is higher than capacity.")
-        elif self.stats.fire_uncovered_zones > 0:
-            self.stats.add_message("Some zones are outside fire station coverage.")
-        elif self.stats.average_fire_risk >= HIGH_RISK_THRESHOLD:
-            self.stats.add_message("City fire risk is high. Add fire stations or water.")
-        elif self.stats.police_uncovered_zones > 0:
-            self.stats.add_message("Some zones are outside police station coverage.")
-        elif self.stats.average_crime_risk >= HIGH_RISK_THRESHOLD:
-            self.stats.add_message("City crime risk is high. Add police stations.")
-        elif self.stats.last_population_delta > 0:
-            self.stats.add_message("New residents moved in.")
-        elif self.stats.last_job_delta > 0:
-            self.stats.add_message("Businesses are hiring.")
-        elif revenue < expenses and self.city_map.road_count() > 0:
-            self.stats.add_message("Maintenance is higher than revenue.")
+            messages.append("Budget is negative. Raise taxes or slow building.")
+        else:
+            if self.stats.power_capacity == 0:
+                messages.append("Build a power plant and power lines.")
+            elif self.stats.unpowered_zones > 0:
+                messages.append("Some zones are not connected to power.")
+            if self.stats.water_capacity == 0:
+                messages.append("Build a water tower and water pipes.")
+            elif self.stats.unwatered_zones > 0:
+                messages.append("Some zones are not connected to water.")
+            if self.stats.power_capacity > 0 and self.stats.power_usage > self.stats.power_capacity:
+                messages.append("Power demand is higher than capacity.")
+            if self.stats.water_capacity > 0 and self.stats.water_usage > self.stats.water_capacity:
+                messages.append("Water demand is higher than capacity.")
+            if self.stats.fire_uncovered_zones > 0:
+                messages.append("Some zones are outside fire station coverage.")
+            if self.stats.average_fire_risk >= HIGH_RISK_THRESHOLD:
+                messages.append("City fire risk is high. Add fire stations or water.")
+            if self.stats.police_uncovered_zones > 0:
+                messages.append("Some zones are outside police station coverage.")
+            if self.stats.average_crime_risk >= HIGH_RISK_THRESHOLD:
+                messages.append("City crime risk is high. Add police stations.")
 
+        if not messages:
+            if self.stats.last_population_delta > 0:
+                messages.append("New residents moved in.")
+            if self.stats.last_job_delta > 0:
+                messages.append("Businesses are hiring.")
+            if revenue < expenses and self.city_map.road_count() > 0:
+                messages.append("Maintenance is higher than revenue.")
+
+        for message in reversed(messages[:3]):
+            if message not in self.stats.messages[-5:]:
+                self.stats.add_message(message)

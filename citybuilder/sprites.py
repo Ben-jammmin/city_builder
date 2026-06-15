@@ -4,8 +4,9 @@ import math
 
 import pygame
 
+from .asset_loader import ImageAssetStore
 from .models import BuildingType, TerrainType, ZoneType
-from .settings import COLORS
+from .settings import COLORS, USE_IMAGE_SPRITES
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +113,7 @@ _CIVIC_LABEL = {
 class SpriteAtlas:
     def __init__(self, font: pygame.font.Font) -> None:
         self.font = font
+        self.assets = ImageAssetStore() if USE_IMAGE_SPRITES else None
         self.cache: dict = {}
 
     # ------------------------------------------------------------------ #
@@ -166,9 +168,16 @@ class SpriteAtlas:
         if development < 0.06 or zone not in _BLD_FRACS:
             return
         stage   = max(1, min(4, int(development * 4) + 1))
+        v       = variant & 3
+        asset = self._asset(self._building_asset_name(zone, stage, level, v), tw)
+        if asset is not None:
+            if rotation in (1, 3):
+                flip_key = ("BAF", zone, stage, level, tw, v)
+                asset = self._get(flip_key, lambda: pygame.transform.flip(asset, True, False))
+            self._blit_grounded(surface, asset, cx, cy, th)
+            return
         bh      = self._bh(zone, stage, level, th)
         extra_h = th // 2
-        v       = variant & 3
         key     = ("B", zone, stage, level, tw, th, v)
         spr     = self._get(key, lambda: self._building_spr(zone, tw, th, bh, stage, level, v, extra_h))
         # For odd rotations (1 & 3) mirror the building so the visible face
@@ -188,6 +197,13 @@ class SpriteAtlas:
         building: BuildingType,
         rotation: int = 0,
     ) -> None:
+        asset = self._asset(f"civic/{building.value}", tw)
+        if asset is not None:
+            if rotation in (1, 3):
+                flip_key = ("CAF", building, tw)
+                asset = self._get(flip_key, lambda: pygame.transform.flip(asset, True, False))
+            self._blit_grounded(surface, asset, cx, cy, th)
+            return
         bh      = self._civic_bh(building, th)
         extra_h = th // 2
         key     = ("C", building, tw, th)
@@ -220,6 +236,11 @@ class SpriteAtlas:
         th: int,
         variant: int,
     ) -> None:
+        asset_size = max(8, tw // 3)
+        asset = self._asset(f"pedestrians/pedestrian_{variant % 3}", asset_size)
+        if asset is not None:
+            surface.blit(asset, (cx - asset.get_width() // 2, cy - asset.get_height()))
+            return
         size = max(3, tw // 6)
         palette = (
             ((244, 190, 111), (61, 93, 150)),
@@ -1089,6 +1110,19 @@ class SpriteAtlas:
             return None
         return (sn.get("north", False), sn.get("east", False),
                 sn.get("south", False), sn.get("west", False))
+
+    def _asset(self, name: str, size: int) -> pygame.Surface | None:
+        if self.assets is None:
+            return None
+        return self.assets.get(name, size)
+
+    def _building_asset_name(self, zone: ZoneType, stage: int, level: int, variant: int) -> str:
+        if level > 1 and zone in (ZoneType.RESIDENTIAL, ZoneType.COMMERCIAL):
+            return f"buildings/{zone.value}_tier2_{stage}_{variant}"
+        return f"buildings/{zone.value}_{stage}_{variant}"
+
+    def _blit_grounded(self, surface: pygame.Surface, sprite: pygame.Surface, cx: int, cy: int, th: int) -> None:
+        surface.blit(sprite, (cx - sprite.get_width() // 2, cy + th - sprite.get_height()))
 
     def _get(self, key: tuple, maker) -> pygame.Surface:
         if key not in self.cache:

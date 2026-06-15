@@ -5,6 +5,7 @@ import unittest
 sys.modules.setdefault("pygame", types.SimpleNamespace())
 
 from citybuilder.ui import Sidebar
+from citybuilder.settings import COMMAND_BAR_HEIGHT, MINIMIZED_COMMAND_BAR_HEIGHT
 
 
 class FakeFont:
@@ -43,6 +44,13 @@ class SidebarLabelTests(unittest.TestCase):
         self.sidebar.handle_scroll(99)
 
         self.assertEqual(self.sidebar.scroll_offset, 0)
+
+    def test_current_height_tracks_minimized_state(self) -> None:
+        self.sidebar.minimized = False
+        self.assertEqual(self.sidebar.current_height(), COMMAND_BAR_HEIGHT)
+
+        self.sidebar.minimized = True
+        self.assertEqual(self.sidebar.current_height(), MINIMIZED_COMMAND_BAR_HEIGHT)
 
 
 if __name__ == "__main__":

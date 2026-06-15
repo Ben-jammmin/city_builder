@@ -1,9 +1,10 @@
-import unittest
 import sys
 import types
+import unittest
 
 sys.modules.setdefault("pygame", types.SimpleNamespace())
 
+from citybuilder.models import BuildingType
 from citybuilder.models import TerrainType, Tile, Tool, ZoneType
 from citybuilder.renderer import Renderer
 from citybuilder.city_map import CityMap
@@ -31,6 +32,13 @@ class RendererToolBlockedTests(unittest.TestCase):
         self.assertFalse(self.renderer._tool_blocked(hill_tile, Tool.POWER_LINE))
         self.assertTrue(self.renderer._tool_blocked(water_tile, Tool.WATER_PIPE))
 
+    def test_road_tool_blocks_zones_and_buildings(self) -> None:
+        zoned_tile = Tile(terrain=TerrainType.GRASS, zone=ZoneType.RESIDENTIAL)
+        building_tile = Tile(terrain=TerrainType.GRASS, building=BuildingType.SCHOOL)
+
+        self.assertTrue(self.renderer._tool_blocked(zoned_tile, Tool.ROAD))
+        self.assertTrue(self.renderer._tool_blocked(building_tile, Tool.ROAD))
+
     def test_bulldoze_only_blocks_empty_grass(self) -> None:
         empty_grass = Tile(terrain=TerrainType.GRASS)
         empty_hill = Tile(terrain=TerrainType.HILL)
@@ -50,6 +58,24 @@ class RendererToolBlockedTests(unittest.TestCase):
             self.renderer._same_terrain_neighbors(city_map, 1, 1, TerrainType.WATER),
             {"north": True, "east": True, "south": False, "west": False},
         )
+
+    def test_connected_utility_network_starts_at_sources_and_ignores_orphans(self) -> None:
+        city_map = CityMap(5, 3)
+        city_map.place_building(0, 1, BuildingType.POWER_PLANT)
+        city_map.place_power_line(1, 1)
+        city_map.place_power_line(2, 1)
+        city_map.place_power_line(4, 1)
+
+        network = self.renderer._connected_utility_network(
+            city_map,
+            {BuildingType.POWER_PLANT},
+            "has_power_line",
+        )
+
+        self.assertIn((0, 1), network)
+        self.assertIn((1, 1), network)
+        self.assertIn((2, 1), network)
+        self.assertNotIn((4, 1), network)
 
 
 if __name__ == "__main__":

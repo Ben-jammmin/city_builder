@@ -42,6 +42,18 @@ class GamePlacementMessageTests(unittest.TestCase):
 
         self.assertEqual(game.stats.messages[-1], "Cannot build on water.")
 
+    def test_road_on_zone_reports_blocked_without_erasing_zone(self) -> None:
+        game = Game.__new__(Game)
+        game.map = CityMap(3, 3)
+        game.stats = CityStats()
+        game.map.place_zone(1, 1, ZoneType.RESIDENTIAL)
+
+        game._place_road((1, 1))
+
+        self.assertEqual(game.stats.messages[-1], "Tile occupied by zone/building.")
+        self.assertEqual(game.map.get(1, 1).zone, ZoneType.RESIDENTIAL)
+        self.assertFalse(game.map.get(1, 1).has_road)
+
 
 if __name__ == "__main__":
     unittest.main()

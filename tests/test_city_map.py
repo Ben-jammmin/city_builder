@@ -32,6 +32,15 @@ class CityMapTests(unittest.TestCase):
         self.assertEqual(city_map.get(1, 1).zone_level, 2)
         self.assertFalse(city_map.place_zone(1, 1, ZoneType.RESIDENTIAL, level=2))
 
+    def test_zone_maintenance_excludes_parks(self) -> None:
+        city_map = CityMap(4, 4)
+        city_map.place_zone(0, 0, ZoneType.RESIDENTIAL, level=2)
+        city_map.place_zone(1, 0, ZoneType.COMMERCIAL)
+        city_map.place_zone(2, 0, ZoneType.PARK)
+
+        self.assertEqual(city_map.zone_maintenance_units(), 3)
+        self.assertEqual(city_map.park_count(), 1)
+
     def test_place_zone_rejects_out_of_bounds_road_and_same_zone(self) -> None:
         city_map = CityMap(3, 3)
         city_map.place_road(0, 0)
@@ -43,24 +52,27 @@ class CityMapTests(unittest.TestCase):
         self.assertFalse(city_map.place_zone(2, 0, ZoneType.RESIDENTIAL))
         self.assertFalse(city_map.place_zone(1, 1, ZoneType.COMMERCIAL))
 
-    def test_place_road_clears_existing_zone_and_population(self) -> None:
+    def test_place_road_rejects_existing_zone_or_building(self) -> None:
         city_map = CityMap(3, 3)
         city_map.place_zone(1, 1, ZoneType.RESIDENTIAL)
-        tile = city_map.get(1, 1)
-        tile.development = 0.75
-        tile.residents = 8
-        tile.jobs = 2
+        city_map.place_building(2, 2, BuildingType.SCHOOL)
 
-        placed = city_map.place_road(1, 1)
+        self.assertFalse(city_map.place_road(1, 1))
+        self.assertFalse(city_map.place_road(2, 2))
+        self.assertEqual(city_map.get(1, 1).zone, ZoneType.RESIDENTIAL)
+        self.assertEqual(city_map.get(2, 2).building, BuildingType.SCHOOL)
+        self.assertEqual(city_map.road_count(), 0)
 
-        self.assertTrue(placed)
-        self.assertTrue(tile.has_road)
-        self.assertEqual(tile.zone, ZoneType.EMPTY)
-        self.assertEqual(tile.development, 0.0)
-        self.assertEqual(tile.residents, 0)
-        self.assertEqual(tile.jobs, 0)
+    def test_place_road_can_share_existing_utility_tile(self) -> None:
+        city_map = CityMap(3, 3)
+        city_map.place_power_line(1, 1)
+        city_map.place_water_pipe(1, 1)
+
+        self.assertTrue(city_map.place_road(1, 1))
+        self.assertTrue(city_map.get(1, 1).has_road)
+        self.assertTrue(city_map.get(1, 1).has_power_line)
+        self.assertTrue(city_map.get(1, 1).has_water_pipe)
         self.assertEqual(city_map.road_count(), 1)
-        self.assertEqual(city_map.zoned_count(), 0)
 
     def test_place_road_rejects_duplicate_and_out_of_bounds(self) -> None:
         city_map = CityMap(2, 2)

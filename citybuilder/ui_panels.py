@@ -22,6 +22,36 @@ PANEL_GAP = 6
 PANEL_PAD = 10
 BUTTON_GAP = 6
 
+MENU_TAB_LABELS = {
+    "Zones": "Zones",
+    "Utilities": "Utility",
+    "Services": "Services",
+    "Transport": "Transit",
+}
+
+TOOL_SHORT_LABELS = {
+    Tool.INSPECT: "Inspect",
+    Tool.RESIDENTIAL: "Residential",
+    Tool.DENSE_RESIDENTIAL: "Dense Res",
+    Tool.COMMERCIAL: "Commercial",
+    Tool.DENSE_COMMERCIAL: "Dense Com",
+    Tool.INDUSTRIAL: "Industrial",
+    Tool.PARK: "Park",
+    Tool.BULLDOZE: "Bulldoze",
+    Tool.ROAD: "Road",
+    Tool.POWER_LINE: "Power Line",
+    Tool.WATER_PIPE: "Water Pipe",
+    Tool.POWER_PLANT: "Plant",
+    Tool.LARGE_POWER_PLANT: "Big Plant",
+    Tool.WATER_TOWER: "Tower",
+    Tool.LARGE_WATER_TOWER: "Large Tower",
+    Tool.POLICE: "Police",
+    Tool.FIRE: "Fire",
+    Tool.SCHOOL: "School",
+    Tool.TRAIN_STATION: "Train",
+    Tool.AIRPORT: "Airport",
+}
+
 def _build_swatch_map() -> dict:
     return {
         Tool.RESIDENTIAL:       COLORS["residential"],
@@ -95,7 +125,8 @@ class SidebarPanelRenderer:
         for index, menu_name in enumerate(MENU_ORDER):
             rect = pygame.Rect(x + index * (button_w + gap), y, button_w, 28)
             self.sidebar.menu_buttons.append((rect, menu_name))
-            self._button(surface, rect, menu_name, active=menu_name == active_menu)
+            label = MENU_TAB_LABELS.get(menu_name, menu_name)
+            self._button(surface, rect, label, active=menu_name == active_menu)
         return y + 32
 
     def draw_controls(self, surface: pygame.Surface, stats, x: int, y: int, width: int, fullscreen: bool) -> int:
@@ -190,18 +221,23 @@ class SidebarPanelRenderer:
     ) -> int:
         tools = MENU_TOOLS[active_menu]
         rows = (len(tools) + 1) // 2
-        panel = self._panel(surface, x, y, width, 32 + rows * 32)
+        row_h = 30
+        panel = self._panel(surface, x, y, width, 32 + rows * row_h)
         self._draw_text(surface, active_menu, panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
+        if active_tool in tools:
+            active_label = fit_label(TOOL_SHORT_LABELS.get(active_tool, TOOL_LABELS[active_tool]), self.sidebar.font_small, width // 2)
+            active_text = self.sidebar.font_small.render(active_label, True, COLORS["muted_text"])
+            surface.blit(active_text, (panel.right - PANEL_PAD - active_text.get_width(), panel.y + 10))
         button_w = (width - PANEL_PAD * 2 - BUTTON_GAP) // 2
         hotkeys_by_tool = {tool: key.upper() for key, tool in TOOL_HOTKEYS.items()}
 
         for index, tool in enumerate(tools):
             col = index % 2
             row = index // 2
-            rect = pygame.Rect(panel.x + PANEL_PAD + col * (button_w + BUTTON_GAP), panel.y + 30 + row * 32, button_w, 27)
+            rect = pygame.Rect(panel.x + PANEL_PAD + col * (button_w + BUTTON_GAP), panel.y + 30 + row * row_h, button_w, 25)
             self.sidebar.tool_buttons.append((rect, tool))
             hotkey = hotkeys_by_tool.get(tool, "")
-            label = f"{hotkey} {TOOL_LABELS[tool]}".strip()
+            label = self._tool_button_label(tool, hotkey)
             swatch = self._swatch_map.get(tool)
             self._button(surface, rect, label, active=tool == active_tool, align_left=True, swatch_color=swatch)
         return panel.bottom
@@ -232,10 +268,10 @@ class SidebarPanelRenderer:
         return panel.bottom
 
     def draw_messages(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
-        panel = self._panel(surface, x, y, width, 100)
+        panel = self._panel(surface, x, y, width, 148)
         self._draw_text(surface, "Advisor", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         line_y = panel.y + 34
-        for message in stats.messages[-2:]:
+        for message in stats.messages[-3:]:
             self._draw_wrapped_text(surface, message, panel.x + PANEL_PAD, line_y, width - PANEL_PAD * 2)
             line_y += 34
         return panel.bottom
@@ -253,6 +289,10 @@ class SidebarPanelRenderer:
             prefix = "Dense " if tile.zone_level > 1 else ""
             return f"{prefix}{tile.zone.value.title()}"
         return "Empty"
+
+    def _tool_button_label(self, tool: Tool, hotkey: str) -> str:
+        label = TOOL_SHORT_LABELS.get(tool, TOOL_LABELS[tool])
+        return f"{hotkey} {label}".strip()
 
     def _draw_stat_pair(
         self,

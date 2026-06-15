@@ -482,6 +482,319 @@ def pedestrian(index: int) -> Canvas:
     return canvas
 
 
+ISO_W = 96
+ISO_H = 128
+PED_W = 24
+PED_H = 32
+
+
+def iso_shadow(canvas: Canvas, cx: int, base_y: int, width: int, depth: int) -> None:
+    canvas.polygon(
+        [
+            (cx, base_y - depth),
+            (cx + width // 2 + 8, base_y - depth // 2 + 3),
+            (cx, base_y + 7),
+            (cx - width // 2 - 8, base_y - depth // 2 + 3),
+        ],
+        rgba((11, 14, 16), 95),
+    )
+
+
+def iso_box(
+    canvas: Canvas,
+    cx: int,
+    base_y: int,
+    width: int,
+    depth: int,
+    height: int,
+    left: Color,
+    right: Color,
+    roof: Color,
+    outline: Color = rgba((43, 42, 40)),
+) -> dict[str, tuple[int, int] | int]:
+    top = base_y - height
+    back = (cx, top - depth)
+    right_top = (cx + width // 2, top - depth // 2)
+    front = (cx, top)
+    left_top = (cx - width // 2, top - depth // 2)
+    base_front = (cx, base_y)
+    base_right = (cx + width // 2, base_y - depth // 2)
+    base_left = (cx - width // 2, base_y - depth // 2)
+
+    canvas.polygon([left_top, front, base_front, base_left], left)
+    canvas.polygon([front, right_top, base_right, base_front], right)
+    canvas.polygon([back, right_top, front, left_top], roof)
+    canvas.line(*left_top, *front, outline, 1)
+    canvas.line(*front, *right_top, outline, 1)
+    canvas.line(*left_top, *base_left, outline, 1)
+    canvas.line(*right_top, *base_right, outline, 1)
+    canvas.line(*base_left, *base_front, outline, 1)
+    canvas.line(*base_front, *base_right, outline, 1)
+    canvas.line(*back, *right_top, shift(outline, 18), 1)
+    canvas.line(*back, *left_top, shift(outline, 12), 1)
+    return {
+        "cx": cx,
+        "base_y": base_y,
+        "width": width,
+        "depth": depth,
+        "height": height,
+        "top": top,
+        "front": front,
+        "left_top": left_top,
+        "right_top": right_top,
+        "base_front": base_front,
+    }
+
+
+def iso_windows(canvas: Canvas, box: dict, rows: int, cols: int, color: Color, lit: Color | None = None) -> None:
+    cx = int(box["cx"])
+    base_y = int(box["base_y"])
+    width = int(box["width"])
+    depth = int(box["depth"])
+    height = int(box["height"])
+    top = int(box["top"])
+    rows = max(1, rows)
+    cols = max(1, cols)
+    lit = lit or shift(color, 60)
+
+    for row in range(rows):
+        wy = top + 8 + row * max(5, (height - 14) // rows)
+        for col in range(cols):
+            offset = -width // 2 + 8 + col * max(5, (width // 2 - 12) // max(1, cols - 1))
+            if offset < -3:
+                x = cx + offset
+                y = wy + (offset + width // 2) // 3
+                canvas.rect(x, y, 4, 5, color if (row + col) % 3 else lit)
+                canvas.rect_outline(x, y, 4, 5, rgba((38, 50, 55)), 1)
+            offset_r = col * max(5, (width // 2 - 12) // max(1, cols - 1)) + 4
+            x = cx + offset_r
+            y = wy + (width // 2 - offset_r) // 3
+            canvas.rect(x, y, 4, 5, color if (row + col + 1) % 3 else lit)
+            canvas.rect_outline(x, y, 4, 5, rgba((38, 50, 55)), 1)
+
+
+def roof_cap(canvas: Canvas, box: dict, roof_color: Color) -> None:
+    cx = int(box["cx"])
+    top = int(box["top"])
+    width = int(box["width"])
+    depth = int(box["depth"])
+    canvas.polygon(
+        [
+            (cx - width // 2 - 4, top - depth // 2 + 2),
+            (cx, top - depth - 13),
+            (cx + width // 2 + 4, top - depth // 2 + 2),
+            (cx, top + 7),
+        ],
+        roof_color,
+    )
+    canvas.polygon(
+        [(cx, top - depth - 13), (cx + width // 2 + 4, top - depth // 2 + 2), (cx, top + 7)],
+        shift(roof_color, -28),
+    )
+    canvas.line(cx, top - depth - 13, cx, top + 7, shift(roof_color, -45), 1)
+
+
+def house(stage: int, variant: int, level: int = 1) -> Canvas:
+    canvas = Canvas(ISO_W, ISO_H)
+    cx = ISO_W // 2
+    base_y = 110
+    wall = [
+        rgba((202, 190, 157)),
+        rgba((194, 179, 145)),
+        rgba((188, 202, 194)),
+        rgba((205, 184, 176)),
+    ][variant]
+    roof = [
+        rgba((128, 71, 58)),
+        rgba((104, 82, 68)),
+        rgba((82, 88, 108)),
+        rgba((146, 88, 59)),
+    ][variant]
+
+    if level > 1:
+        width = 36 + stage * 7
+        depth = 24 + stage * 3
+        height = 34 + stage * 13
+        iso_shadow(canvas, cx, base_y, width, depth)
+        box = iso_box(canvas, cx, base_y, width, depth, height, shift(wall, -22), shift(wall, -4), shift(roof, -18))
+        iso_windows(canvas, box, rows=stage + 2, cols=3, color=rgba((82, 132, 151)), lit=rgba((207, 217, 174)))
+        canvas.rect(cx - 4, base_y - 13, 8, 13, rgba((76, 54, 42)))
+        canvas.rect(cx + width // 4, int(box["top"]) - 8, 5, 13, shift(roof, -10))
+        canvas.line(cx + width // 4, int(box["top"]) - 8, cx + width // 4 + 5, int(box["top"]) - 8, shift(roof, 26), 1)
+        return canvas
+
+    width = 28 + stage * 5
+    depth = 20 + stage * 2
+    height = 18 + stage * 6
+    iso_shadow(canvas, cx, base_y, width, depth)
+    box = iso_box(canvas, cx, base_y, width, depth, height, shift(wall, -18), shift(wall, 2), shift(roof, -6))
+    roof_cap(canvas, box, roof)
+    iso_windows(canvas, box, rows=max(1, stage), cols=2, color=rgba((83, 132, 154)), lit=rgba((219, 201, 128)))
+    canvas.rect(cx - 3, base_y - 10, 7, 10, rgba((74, 52, 39)))
+    if stage >= 3:
+        canvas.rect(cx + width // 4, int(box["top"]) - 5, 4, 10, shift(roof, -18))
+    if stage >= 4:
+        canvas.polygon([(cx - 36, base_y - 3), (cx - 10, base_y + 10), (cx + 22, base_y - 2), (cx - 3, base_y - 14)], rgba((174, 151, 110)))
+    return canvas
+
+
+def commercial(stage: int, variant: int, level: int = 1) -> Canvas:
+    canvas = Canvas(ISO_W, ISO_H)
+    cx = ISO_W // 2
+    base_y = 111
+    facade = [
+        rgba((146, 174, 191)),
+        rgba((166, 176, 185)),
+        rgba((141, 166, 198)),
+        rgba((150, 188, 184)),
+    ][variant]
+    accent = [
+        rgba((218, 190, 75)),
+        rgba((207, 112, 90)),
+        rgba((112, 166, 128)),
+        rgba((161, 132, 201)),
+    ][variant]
+    width = 34 + stage * 7 + (10 if level > 1 else 0)
+    depth = 24 + stage * 3
+    height = 30 + stage * 14 + (18 if level > 1 else 0)
+    iso_shadow(canvas, cx, base_y, width, depth)
+    box = iso_box(canvas, cx, base_y, width, depth, height, shift(facade, -26), shift(facade, -4), rgba((60, 75, 89)))
+    iso_windows(canvas, box, rows=stage + (3 if level > 1 else 1), cols=3 if level == 1 else 4, color=rgba((102, 165, 190)), lit=rgba((198, 230, 229)))
+    canvas.rect(cx - 11, base_y - 11, 22, 7, accent)
+    canvas.line(cx - width // 3, int(box["top"]) + 8, cx + width // 3, int(box["top"]) + 8, shift(accent, 25), 1)
+    if stage >= 3:
+        canvas.rect(cx + width // 5, int(box["top"]) - 6, 10, 5, rgba((77, 89, 99)))
+        canvas.line(cx, int(box["top"]), cx, int(box["top"]) - 14, rgba((55, 63, 70)), 2)
+    return canvas
+
+
+def industrial(stage: int, variant: int) -> Canvas:
+    canvas = Canvas(ISO_W, ISO_H)
+    cx = ISO_W // 2
+    base_y = 111
+    body = [
+        rgba((142, 134, 111)),
+        rgba((135, 137, 127)),
+        rgba((157, 128, 100)),
+        rgba((124, 140, 128)),
+    ][variant]
+    width = 46 + stage * 8
+    depth = 28 + stage * 3
+    height = 20 + stage * 7
+    iso_shadow(canvas, cx, base_y, width, depth)
+    box = iso_box(canvas, cx, base_y, width, depth, height, shift(body, -22), shift(body, 0), rgba((82, 79, 69)))
+    for i in range(3 + stage):
+        x = cx - width // 2 + 8 + i * max(6, width // (3 + stage))
+        canvas.line(x, int(box["top"]) - depth // 2 + 2, x + 7, int(box["top"]) - depth // 2 + 7, shift(body, -48), 1)
+    iso_windows(canvas, box, rows=max(1, stage // 2), cols=3, color=rgba((176, 157, 118)), lit=rgba((219, 186, 98)))
+    stack_x = cx + width // 3 if variant % 2 == 0 else cx - width // 3
+    canvas.rect(stack_x, int(box["top"]) - 18, 7, 29, rgba((80, 76, 68)))
+    canvas.rect_outline(stack_x, int(box["top"]) - 18, 7, 29, rgba((43, 41, 38)), 1)
+    canvas.ellipse(stack_x - 4, int(box["top"]) - 28, 17, 9, rgba((122, 126, 118), 145))
+    if stage >= 3:
+        canvas.rect(cx - width // 3, base_y - 13, 18, 13, rgba((82, 73, 63)))
+        for sx in range(cx - width // 3, cx - width // 3 + 18, 6):
+            canvas.line(sx, base_y - 13, sx + 6, base_y, rgba((213, 174, 70)), 1)
+    return canvas
+
+
+def civic(kind: str) -> Canvas:
+    canvas = Canvas(ISO_W, ISO_H)
+    cx = ISO_W // 2
+    base_y = 111
+    colors = {
+        "power_plant": rgba((207, 178, 74)),
+        "large_power_plant": rgba((213, 160, 58)),
+        "water_tower": rgba((84, 166, 204)),
+        "large_water_tower": rgba((74, 175, 210)),
+        "police": rgba((82, 112, 184)),
+        "fire": rgba((202, 77, 66)),
+        "school": rgba((139, 108, 193)),
+        "train_station": rgba((188, 137, 87)),
+        "airport": rgba((93, 145, 195)),
+    }
+    color = colors[kind]
+
+    if "water_tower" in kind:
+        width = 38 if kind == "water_tower" else 50
+        depth = 25 if kind == "water_tower" else 31
+        tank_r = 15 if kind == "water_tower" else 20
+        iso_shadow(canvas, cx, base_y, width, depth)
+        leg_c = rgba((62, 72, 80))
+        for lx in (cx - width // 4, cx + width // 4, cx):
+            canvas.line(lx, base_y - 8, cx, base_y - 58, leg_c, 2)
+        canvas.ellipse(cx - tank_r, base_y - 75, tank_r * 2, tank_r + 9, shift(color, -22))
+        canvas.ellipse(cx - tank_r, base_y - 83, tank_r * 2, tank_r + 11, shift(color, 25))
+        canvas.rect(cx - 5, base_y - 58, 10, 28, shift(color, -10))
+        canvas.rect_outline(cx - tank_r, base_y - 78, tank_r * 2, tank_r + 15, rgba((42, 50, 56)), 1)
+        return canvas
+
+    if "power_plant" in kind:
+        width = 50 if kind == "power_plant" else 66
+        depth = 30
+        height = 34 if kind == "power_plant" else 44
+        iso_shadow(canvas, cx, base_y, width, depth)
+        box = iso_box(canvas, cx, base_y, width, depth, height, shift(color, -30), shift(color, -8), rgba((100, 83, 54)))
+        for sx in ([cx + width // 4] if kind == "power_plant" else [cx - 13, cx + 22]):
+            canvas.rect(sx, int(box["top"]) - 30, 9, 38, rgba((122, 88, 66)))
+            for band in range(int(box["top"]) - 28, int(box["top"]) + 3, 8):
+                canvas.rect(sx, band, 9, 3, rgba((226, 228, 214)))
+            canvas.ellipse(sx - 5, int(box["top"]) - 38, 19, 10, rgba((133, 134, 124), 140))
+        return canvas
+
+    if kind == "airport":
+        iso_shadow(canvas, cx, base_y, 64, 30)
+        box = iso_box(canvas, cx, base_y, 64, 30, 24, shift(color, -20), color, rgba((57, 87, 117)))
+        canvas.line(cx - 28, base_y - 17, cx + 30, base_y - 17, rgba((226, 230, 219)), 5)
+        canvas.line(cx, int(box["top"]) - 3, cx, base_y - 3, shift(color, 35), 4)
+        canvas.polygon([(cx, int(box["top"]) - 22), (cx - 11, int(box["top"]) - 2), (cx + 11, int(box["top"]) - 2)], shift(color, 48))
+        return canvas
+
+    width = 46
+    depth = 26
+    height = 31
+    if kind == "train_station":
+        width = 62
+        height = 24
+    iso_shadow(canvas, cx, base_y, width, depth)
+    box = iso_box(canvas, cx, base_y, width, depth, height, shift(rgba((207, 208, 196)), -20), rgba((207, 208, 196)), shift(color, -18))
+    canvas.rect(cx - 13, base_y - 15, 26, 10, color)
+    if kind == "fire":
+        canvas.rect(cx - 9, base_y - 18, 18, 18, color)
+        canvas.line(cx, base_y - 18, cx, base_y, rgba((240, 216, 182)), 1)
+    elif kind == "police":
+        canvas.rect(cx - 10, base_y - 17, 20, 13, color)
+        canvas.rect(cx - 4, base_y - 14, 8, 3, rgba((236, 230, 168)))
+    elif kind == "school":
+        canvas.polygon([(cx - width // 2 - 2, int(box["top"]) - depth // 2), (cx, int(box["top"]) - depth - 18), (cx + width // 2 + 2, int(box["top"]) - depth // 2)], color)
+        canvas.rect(cx - 5, base_y - 15, 10, 15, rgba((84, 60, 44)))
+    elif kind == "train_station":
+        for rail_y in (base_y - 8, base_y - 2):
+            canvas.line(cx - 32, rail_y, cx + 32, rail_y, color, 3)
+        for tie in range(cx - 28, cx + 29, 10):
+            canvas.line(tie, base_y - 13, tie + 5, base_y + 2, rgba((54, 51, 45)), 1)
+    return canvas
+
+
+def pedestrian(index: int) -> Canvas:
+    canvas = Canvas(PED_W, PED_H)
+    palette = [
+        (rgba((238, 185, 112)), rgba((62, 91, 143))),
+        (rgba((224, 124, 103)), rgba((77, 126, 88))),
+        (rgba((217, 195, 140)), rgba((137, 82, 124))),
+    ]
+    shirt, pants = palette[index]
+    canvas.ellipse(5, 27, 14, 4, rgba((20, 24, 24), 120))
+    canvas.rect(10, 18, 5, 8, pants)
+    canvas.rect(8, 12, 9, 8, shirt)
+    canvas.circle(12, 9, 4, rgba((239, 197, 158)))
+    canvas.rect(8, 21, 3, 8, rgba((48, 48, 55)))
+    canvas.rect(14, 21, 3, 8, rgba((48, 48, 55)))
+    canvas.set(10, 8, rgba((53, 43, 35)))
+    canvas.set(14, 8, rgba((53, 43, 35)))
+    return canvas
+
+
 def make_preview() -> Canvas:
     samples = [
         terrain_grass(0),
@@ -521,14 +834,16 @@ def make_preview() -> Canvas:
     gap = 8
     columns = 8
     rows = math.ceil(len(samples) / columns)
-    preview = Canvas(columns * SIZE + (columns + 1) * gap, rows * SIZE + (rows + 1) * gap, rgba((34, 39, 44)))
+    cell_w = max(sample.width for sample in samples)
+    cell_h = max(sample.height for sample in samples)
+    preview = Canvas(columns * cell_w + (columns + 1) * gap, rows * cell_h + (rows + 1) * gap, rgba((34, 39, 44)))
     for index, sample in enumerate(samples):
         col = index % columns
         row = index // columns
-        x = gap + col * (SIZE + gap)
-        y = gap + row * (SIZE + gap)
-        preview.rect(x - 2, y - 2, SIZE + 4, SIZE + 4, rgba((22, 26, 30)))
-        preview.paste(sample, x, y)
+        x = gap + col * (cell_w + gap)
+        y = gap + row * (cell_h + gap)
+        preview.rect(x - 2, y - 2, cell_w + 4, cell_h + 4, rgba((22, 26, 30)))
+        preview.paste(sample, x + (cell_w - sample.width) // 2, y + cell_h - sample.height)
     return preview
 
 

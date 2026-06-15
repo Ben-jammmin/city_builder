@@ -63,7 +63,10 @@ class CityMap:
     def can_place_road(self, x: int, y: int) -> bool:
         if not self.is_buildable_land(x, y):
             return False
-        return not self.get(x, y).has_road
+        tile = self.get(x, y)
+        if tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE:
+            return False
+        return not tile.has_road
 
     def can_place_power_line(self, x: int, y: int) -> bool:
         if not self.is_buildable_land(x, y):
@@ -144,12 +147,6 @@ class CityMap:
             return False
         tile = self.get(x, y)
         self._clear_natural_cover(tile)
-        tile.zone = ZoneType.EMPTY
-        tile.building = BuildingType.NONE
-        tile.development = 0.0
-        tile.residents = 0
-        tile.jobs = 0
-        tile.land_value = 1.0
         tile.has_road = True
         return True
 
@@ -203,7 +200,11 @@ class CityMap:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.zone != ZoneType.EMPTY)
 
     def zone_maintenance_units(self) -> int:
-        return sum(tile.zone_level for _, _, tile in self.iter_tiles() if tile.zone != ZoneType.EMPTY)
+        return sum(
+            tile.zone_level
+            for _, _, tile in self.iter_tiles()
+            if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK)
+        )
 
     def power_line_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.has_power_line)

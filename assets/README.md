@@ -1,8 +1,10 @@
 # City Builder Sprite Assets
 
-The game can run with no image files because `citybuilder/sprites.py` still draws procedural fallback art. If you add PNGs here, the renderer will use them automatically.
+The game uses this generated PNG pack for buildings, civic buildings, and pedestrians. It can still run with no image files because `citybuilder/sprites.py` draws procedural fallback art.
 
-All files should be square PNGs. A source size of 32x32 or 64x64 works well; the game scales them to the current zoom level.
+Building and civic sprites are transparent, bottom-centered isometric PNGs based on `docs/SPRITE_STYLE_GUIDE.md`. Terrain, roads, utilities, zone bases, overlays, and warnings remain procedural in the renderer.
+
+The PNG hook is controlled by `USE_IMAGE_SPRITES` in `citybuilder/settings.py`.
 
 This folder includes a generated starter pack. To rebuild it, run:
 
