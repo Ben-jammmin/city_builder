@@ -130,6 +130,11 @@ class Game:
             self.stats.change_tax_rate(1)
         elif event.key in (pygame.K_MINUS, pygame.K_UNDERSCORE):
             self.stats.change_tax_rate(-1)
+        # Q = rotate view counter-clockwise, E = rotate view clockwise
+        elif event.key == pygame.K_q:
+            self.camera.rotate_ccw()
+        elif event.key == pygame.K_e:
+            self.camera.rotate_cw()
         else:
             key_name = pygame.key.name(event.key)
             if key_name in TOOL_HOTKEYS:

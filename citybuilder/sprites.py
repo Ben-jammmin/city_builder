@@ -1,700 +1,1096 @@
 from __future__ import annotations
 
+import math
+
 import pygame
 
-from .asset_loader import ImageAssetStore
 from .models import BuildingType, TerrainType, ZoneType
 from .settings import COLORS
 
 
-TERRAIN_VARIANTS = 4
-CONNECTION_ORDER = ("north", "east", "south", "west")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-ZONE_COLORS = {
-    ZoneType.RESIDENTIAL: "residential",
-    ZoneType.COMMERCIAL: "commercial",
-    ZoneType.INDUSTRIAL: "industrial",
-}
+def _s(color: tuple, amt: int) -> tuple:
+    return tuple(max(0, min(255, c + amt)) for c in color)
 
-BUILDING_COLORS = {
-    BuildingType.POWER_PLANT: "power",
-    BuildingType.LARGE_POWER_PLANT: "power",
-    BuildingType.WATER_TOWER: "water",
-    BuildingType.LARGE_WATER_TOWER: "water",
-    BuildingType.POLICE: "police",
-    BuildingType.FIRE: "fire",
-    BuildingType.SCHOOL: "school",
-    BuildingType.TRAIN_STATION: "train_station",
-    BuildingType.AIRPORT: "airport",
-}
 
-BUILDING_LABELS = {
-    BuildingType.POWER_PLANT: "P",
-    BuildingType.LARGE_POWER_PLANT: "P+",
-    BuildingType.WATER_TOWER: "W",
-    BuildingType.LARGE_WATER_TOWER: "W+",
-    BuildingType.POLICE: "Po",
-    BuildingType.FIRE: "F",
-    BuildingType.SCHOOL: "S",
-    BuildingType.TRAIN_STATION: "T",
-    BuildingType.AIRPORT: "A",
-}
+def _lerp(a: int, b: int, t: float) -> int:
+    return int(a + (b - a) * t)
+
+
+def _diam_pts(tw: int, th: int, oy: int = 0) -> list[tuple[int, int]]:
+    hw, hh = tw // 2, th // 2
+    return [(hw, oy), (tw, oy + hh), (hw, oy + th), (0, oy + hh)]
 
 
 def tile_variant(x: int, y: int) -> int:
-    return abs(x * 37 + y * 17) % TERRAIN_VARIANTS
+    return (x * 37 + y * 17) & 3
 
 
-def connection_mask(connections: dict[str, bool]) -> str:
-    return "".join("1" if connections.get(direction, False) else "0" for direction in CONNECTION_ORDER)
+# ---------------------------------------------------------------------------
+# Colour palettes
+# ---------------------------------------------------------------------------
+
+_GRASS = [
+    (82, 115, 60),
+    (74, 105, 54),
+    (90, 124, 66),
+    (70, 100, 52),
+]
+
+_ZONE_WALL = {
+    ZoneType.RESIDENTIAL: [(196, 176, 145), (188, 166, 134), (205, 184, 154), (190, 172, 140)],
+    ZoneType.COMMERCIAL:  [(118, 148, 182), (108, 138, 172), (128, 156, 190), (112, 142, 178)],
+    ZoneType.INDUSTRIAL:  [(148, 138, 115), (138, 128, 106), (156, 145, 122), (142, 132, 110)],
+    ZoneType.PARK:        [(62, 138, 76),   (54, 126, 68),   (70, 148, 84),   (58, 132, 72)],
+}
+
+_ZONE_ROOF = {
+    ZoneType.RESIDENTIAL: (152, 75, 58),
+    ZoneType.COMMERCIAL:  (58, 78, 100),
+    ZoneType.INDUSTRIAL:  (82, 78, 65),
+    ZoneType.PARK:        (42, 105, 58),
+}
+
+_ZONE_WIN = {
+    ZoneType.RESIDENTIAL: (222, 195, 138),
+    ZoneType.COMMERCIAL:  (165, 215, 245),
+    ZoneType.INDUSTRIAL:  (188, 172, 132),
+    ZoneType.PARK:        (168, 218, 148),
+}
+
+_BLD_FRACS = {
+    ZoneType.RESIDENTIAL: [0, 0.70, 1.10, 1.60, 2.10],
+    ZoneType.COMMERCIAL:  [0, 0.80, 1.30, 2.00, 2.80],
+    ZoneType.INDUSTRIAL:  [0, 0.70, 1.00, 1.40, 1.80],
+    ZoneType.PARK:        [0, 0.50, 0.70, 0.90, 1.10],
+}
+
+_CIVIC_COLOR_KEY = {
+    BuildingType.POWER_PLANT:       "power",
+    BuildingType.LARGE_POWER_PLANT: "power",
+    BuildingType.WATER_TOWER:       "water",
+    BuildingType.LARGE_WATER_TOWER: "water",
+    BuildingType.POLICE:            "police",
+    BuildingType.FIRE:              "fire",
+    BuildingType.SCHOOL:            "school",
+    BuildingType.TRAIN_STATION:     "train_station",
+    BuildingType.AIRPORT:           "airport",
+}
+
+_CIVIC_HEIGHT = {
+    BuildingType.POLICE:            1.40,
+    BuildingType.FIRE:              1.40,
+    BuildingType.SCHOOL:            1.50,
+    BuildingType.POWER_PLANT:       2.00,
+    BuildingType.WATER_TOWER:       2.20,
+    BuildingType.LARGE_POWER_PLANT: 2.80,
+    BuildingType.LARGE_WATER_TOWER: 2.60,
+    BuildingType.TRAIN_STATION:     2.00,
+    BuildingType.AIRPORT:           1.80,
+}
+
+_CIVIC_LABEL = {
+    BuildingType.POWER_PLANT:       "P",
+    BuildingType.LARGE_POWER_PLANT: "P+",
+    BuildingType.WATER_TOWER:       "W",
+    BuildingType.LARGE_WATER_TOWER: "W+",
+    BuildingType.POLICE:            "Po",
+    BuildingType.FIRE:              "Fi",
+    BuildingType.SCHOOL:            "Sc",
+    BuildingType.TRAIN_STATION:     "Tr",
+    BuildingType.AIRPORT:           "Ap",
+}
 
 
-def terrain_asset_names(terrain: TerrainType, variant: int) -> tuple[str, ...]:
-    if terrain == TerrainType.GRASS:
-        return (f"terrain/grass_{variant % TERRAIN_VARIANTS}", "terrain/grass")
-    if terrain == TerrainType.FOREST:
-        return (f"terrain/forest_{variant % 2}", "terrain/forest")
-    if terrain == TerrainType.WATER:
-        return ("terrain/water",)
-    if terrain == TerrainType.HILL:
-        return ("terrain/hill",)
-    return ()
-
-
-def zone_asset_name(zone: ZoneType, level: int = 1) -> str:
-    if level > 1:
-        return f"zones/{zone.value}_tier{level}"
-    return f"zones/{zone.value}"
-
-
-def zone_asset_names(zone: ZoneType, level: int = 1) -> tuple[str, ...]:
-    if level > 1:
-        return (zone_asset_name(zone, level), zone_asset_name(zone, 1))
-    return (zone_asset_name(zone, 1),)
-
-
-def zone_building_asset_name(zone: ZoneType, stage: int, variant: int, level: int = 1) -> str:
-    if level > 1:
-        return f"buildings/{zone.value}_tier{level}_{stage}_{variant % TERRAIN_VARIANTS}"
-    return f"buildings/{zone.value}_{stage}_{variant % TERRAIN_VARIANTS}"
-
-
-def zone_building_asset_names(zone: ZoneType, stage: int, variant: int, level: int = 1) -> tuple[str, ...]:
-    if level > 1:
-        return (
-            zone_building_asset_name(zone, stage, variant, level),
-            zone_building_asset_name(zone, stage, variant, 1),
-        )
-    return (zone_building_asset_name(zone, stage, variant, 1),)
-
-
-def civic_asset_name(building: BuildingType) -> str:
-    return f"civic/{building.value}"
-
-
-def road_asset_name(connections: dict[str, bool]) -> str:
-    return f"roads/road_{connection_mask(connections)}"
-
-
-def utility_asset_name(utility: str, connections: dict[str, bool]) -> str:
-    return f"utilities/{utility}_{connection_mask(connections)}"
-
-
-def pedestrian_asset_name(variant: int) -> str:
-    return f"pedestrians/pedestrian_{variant % 3}"
-
-
-def _shift(color: tuple[int, int, int], amount: int) -> tuple[int, int, int]:
-    return tuple(max(0, min(255, channel + amount)) for channel in color)
-
+# ---------------------------------------------------------------------------
+# Sprite atlas
+# ---------------------------------------------------------------------------
 
 class SpriteAtlas:
-    def __init__(self, font: pygame.font.Font, assets: ImageAssetStore | None = None) -> None:
+    def __init__(self, font: pygame.font.Font) -> None:
         self.font = font
-        self.assets = assets if assets is not None else ImageAssetStore()
-        self.cache: dict[tuple, pygame.Surface] = {}
+        self.cache: dict = {}
+
+    # ------------------------------------------------------------------ #
+    # Public draw interface                                                #
+    # ------------------------------------------------------------------ #
 
     def draw_terrain(
         self,
         surface: pygame.Surface,
-        rect: pygame.Rect,
+        cx: int,
+        cy: int,
+        tw: int,
+        th: int,
         terrain: TerrainType,
         x: int,
         y: int,
-        same_neighbors: dict[str, bool] | None = None,
+        same_neighbors: dict | None = None,
     ) -> None:
-        variant = tile_variant(x, y)
-        sprite = self._asset_from_names(terrain_asset_names(terrain, variant), rect.width)
-        if sprite is None:
-            sprite = self._terrain_sprite(terrain, rect.width, variant, same_neighbors)
-        surface.blit(sprite, rect.topleft)
+        v = tile_variant(x, y)
+        ek = self._edge_key(same_neighbors) if terrain == TerrainType.WATER else None
+        key = ("T", terrain, tw, v, ek)
+        spr = self._get(key, lambda: self._terrain_spr(terrain, tw, th, v, same_neighbors))
+        surface.blit(spr, (cx - tw // 2, cy))
 
-    def draw_zone(
+    def draw_zone_base(
         self,
         surface: pygame.Surface,
-        rect: pygame.Rect,
+        cx: int,
+        cy: int,
+        tw: int,
+        th: int,
+        zone: ZoneType,
+        level: int,
+    ) -> None:
+        key = ("ZB", zone, level, tw)
+        spr = self._get(key, lambda: self._zone_base_spr(zone, level, tw, th))
+        surface.blit(spr, (cx - tw // 2, cy))
+
+    def draw_building(
+        self,
+        surface: pygame.Surface,
+        cx: int,
+        cy: int,
+        tw: int,
+        th: int,
         zone: ZoneType,
         development: float,
         level: int = 1,
         variant: int = 0,
+        rotation: int = 0,
     ) -> None:
-        sprite = self._asset_from_names(zone_asset_names(zone, level), rect.width)
-        if sprite is None:
-            sprite = self._zone_sprite(zone, rect.width)
-        surface.blit(sprite, rect.topleft)
-        if development > 0.08:
-            self.draw_zone_building(surface, rect, zone, development, level, variant)
+        if development < 0.06 or zone not in _BLD_FRACS:
+            return
+        stage   = max(1, min(4, int(development * 4) + 1))
+        bh      = self._bh(zone, stage, level, th)
+        extra_h = th // 2
+        v       = variant & 3
+        key     = ("B", zone, stage, level, tw, th, v)
+        spr     = self._get(key, lambda: self._building_spr(zone, tw, th, bh, stage, level, v, extra_h))
+        # For odd rotations (1 & 3) mirror the building so the visible face
+        # roughly corresponds to what you'd see from that viewing angle.
+        if rotation in (1, 3):
+            flip_key = ("BF", zone, stage, level, tw, th, v)
+            spr = self._get(flip_key, lambda: pygame.transform.flip(spr, True, False))
+        surface.blit(spr, (cx - tw // 2, cy - bh - extra_h))
 
-    def draw_zone_building(
+    def draw_civic_building(
         self,
         surface: pygame.Surface,
-        rect: pygame.Rect,
-        zone: ZoneType,
-        development: float,
-        level: int = 1,
-        variant: int = 0,
+        cx: int,
+        cy: int,
+        tw: int,
+        th: int,
+        building: BuildingType,
+        rotation: int = 0,
     ) -> None:
-        stage = max(1, min(4, int(development * 4) + 1))
-        sprite = self._asset_from_names(zone_building_asset_names(zone, stage, variant, level), rect.width)
-        if sprite is None:
-            sprite = self._zone_building_sprite(zone, rect.width, stage, variant)
-        surface.blit(sprite, rect.topleft)
+        bh      = self._civic_bh(building, th)
+        extra_h = th // 2
+        key     = ("C", building, tw, th)
+        spr     = self._get(key, lambda: self._civic_spr(building, tw, th, bh, extra_h))
+        if rotation in (1, 3):
+            flip_key = ("CF", building, tw, th)
+            spr = self._get(flip_key, lambda: pygame.transform.flip(spr, True, False))
+        surface.blit(spr, (cx - tw // 2, cy - bh - extra_h))
 
-    def draw_civic_building(self, surface: pygame.Surface, rect: pygame.Rect, building: BuildingType) -> None:
-        sprite = self._asset(civic_asset_name(building), rect.width)
-        if sprite is None:
-            sprite = self._civic_sprite(building, rect.width)
-        surface.blit(sprite, rect.topleft)
+    def draw_road(
+        self,
+        surface: pygame.Surface,
+        cx: int,
+        cy: int,
+        tw: int,
+        th: int,
+        connections: dict[str, bool],
+    ) -> None:
+        key = ("R", tw, connections["north"], connections["east"],
+               connections["south"], connections["west"])
+        spr = self._get(key, lambda: self._road_spr(tw, th, connections))
+        surface.blit(spr, (cx - tw // 2, cy))
 
-    def draw_road(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
-        sprite = self._asset(road_asset_name(connections), rect.width)
-        if sprite is None:
-            sprite = self._road_sprite(rect.width, connections)
-        surface.blit(sprite, rect.topleft)
-
-    def draw_power_line(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
-        sprite = self._asset(utility_asset_name("power", connections), rect.width)
-        if sprite is None:
-            sprite = self._utility_sprite("power", rect.width, connections)
-        surface.blit(sprite, rect.topleft)
-
-    def draw_water_pipe(self, surface: pygame.Surface, rect: pygame.Rect, connections: dict[str, bool]) -> None:
-        sprite = self._asset(utility_asset_name("water", connections), rect.width)
-        if sprite is None:
-            sprite = self._utility_sprite("water", rect.width, connections)
-        surface.blit(sprite, rect.topleft)
-
-    def draw_pedestrian(self, surface: pygame.Surface, center: tuple[int, int], size: int, variant: int) -> None:
-        if size < 2:
-            return
-        sprite_size = max(4, size * 2)
-        sprite = self._asset(pedestrian_asset_name(variant), sprite_size)
-        if sprite is not None:
-            surface.blit(sprite, (center[0] - sprite_size // 2, center[1] - sprite_size // 2))
-            return
-        shadow_rect = pygame.Rect(0, 0, size * 2, max(2, size // 2))
-        shadow_rect.center = (center[0], center[1] + size // 2)
-        pygame.draw.ellipse(surface, (24, 26, 24), shadow_rect)
+    def draw_pedestrian(
+        self,
+        surface: pygame.Surface,
+        cx: int,
+        cy: int,
+        tw: int,
+        th: int,
+        variant: int,
+    ) -> None:
+        size = max(3, tw // 6)
         palette = (
             ((244, 190, 111), (61, 93, 150)),
             ((238, 134, 112), (80, 130, 95)),
             ((219, 198, 145), (145, 86, 128)),
         )
-        shirt, pants = palette[variant % len(palette)]
-        pygame.draw.circle(surface, shirt, (center[0], center[1] - size // 2), max(2, size // 2))
-        pygame.draw.rect(surface, pants, pygame.Rect(center[0] - size // 3, center[1], max(2, size * 2 // 3), size), border_radius=1)
-        pygame.draw.circle(surface, (248, 205, 163), (center[0], center[1] - size), max(2, size // 3))
+        shirt, pants = palette[variant % 3]
+        shadow = pygame.Rect(cx - size, cy + size // 4, size * 2, max(2, size // 2))
+        pygame.draw.ellipse(surface, (16, 18, 16), shadow)
+        pygame.draw.circle(surface, shirt, (cx, cy - size // 2), max(2, size // 2))
+        pygame.draw.rect(surface, pants,
+                         pygame.Rect(cx - size // 3, cy, max(2, size * 2 // 3), size),
+                         border_radius=1)
+        pygame.draw.circle(surface, (248, 205, 163), (cx, cy - size), max(1, size // 3))
 
-    def _asset(self, name: str, size: int) -> pygame.Surface | None:
-        return self.assets.get(name, size)
+    # ------------------------------------------------------------------ #
+    # Window / story helpers                                               #
+    # ------------------------------------------------------------------ #
 
-    def _asset_from_names(self, names: tuple[str, ...], size: int) -> pygame.Surface | None:
-        for name in names:
-            sprite = self._asset(name, size)
-            if sprite is not None:
-                return sprite
-        return None
+    def _left_windows(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        ey: int,
+        wc: tuple,
+        n_cols: int,
+        n_rows: int,
+    ) -> None:
+        """Draw parallelogram windows on the SW (left) face."""
+        if tw < 16 or bh < 8 or n_cols < 1 or n_rows < 1:
+            return
+        mg_u, mg_v = 0.14, 0.10
+        cell_u = (1.0 - 2 * mg_u) / n_cols
+        cell_v = (1.0 - 2 * mg_v) / n_rows
+        wu = cell_u * 0.62
+        wv = cell_v * 0.56
 
-    def _terrain_sprite(
+        frame_c = _s(wc, -60)
+
+        def lpt(u: float, v: float) -> tuple[int, int]:
+            return (int(u * hw), int(hh + ey + u * hh + v * bh))
+
+        for r in range(n_rows):
+            for c in range(n_cols):
+                uc = mg_u + (c + 0.5) * cell_u
+                vc = mg_v + (r + 0.5) * cell_v
+                u1, u2 = uc - wu / 2, uc + wu / 2
+                v1, v2 = vc - wv / 2, vc + wv / 2
+                pts = [lpt(u1, v1), lpt(u2, v1), lpt(u2, v2), lpt(u1, v2)]
+                if abs(pts[0][0] - pts[1][0]) > 0 or abs(pts[0][1] - pts[2][1]) > 1:
+                    pygame.draw.polygon(spr, wc, pts)
+                    pygame.draw.polygon(spr, frame_c, pts, 1)
+
+    def _right_windows(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        ey: int,
+        wc: tuple,
+        n_cols: int,
+        n_rows: int,
+    ) -> None:
+        """Draw parallelogram windows on the SE (right) face."""
+        if tw < 16 or bh < 8 or n_cols < 1 or n_rows < 1:
+            return
+        mg_u, mg_v = 0.14, 0.10
+        cell_u = (1.0 - 2 * mg_u) / n_cols
+        cell_v = (1.0 - 2 * mg_v) / n_rows
+        wu = cell_u * 0.62
+        wv = cell_v * 0.56
+
+        frame_c = _s(wc, -60)
+
+        def rpt(u: float, v: float) -> tuple[int, int]:
+            return (int(hw + u * hw), int(th + ey - u * hh + v * bh))
+
+        for r in range(n_rows):
+            for c in range(n_cols):
+                uc = mg_u + (c + 0.5) * cell_u
+                vc = mg_v + (r + 0.5) * cell_v
+                u1, u2 = uc - wu / 2, uc + wu / 2
+                v1, v2 = vc - wv / 2, vc + wv / 2
+                pts = [rpt(u1, v1), rpt(u2, v1), rpt(u2, v2), rpt(u1, v2)]
+                if abs(pts[0][0] - pts[1][0]) > 0 or abs(pts[0][1] - pts[2][1]) > 1:
+                    pygame.draw.polygon(spr, wc, pts)
+                    pygame.draw.polygon(spr, frame_c, pts, 1)
+
+    def _story_lines(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        ey: int,
+        lc: tuple,
+        n_floors: int,
+    ) -> None:
+        """Draw horizontal story-divider lines across both visible faces."""
+        if tw < 18 or n_floors < 2 or bh < 10:
+            return
+        lw = max(1, tw // 32)
+        for f in range(1, n_floors):
+            v = f / n_floors
+            y_at_v = int(v * bh)
+            # Left face: from (0, hh+ey+y) to (hw, th+ey+y)
+            pygame.draw.line(spr, lc,
+                             (0,  hh + ey + y_at_v),
+                             (hw, th + ey + y_at_v), lw)
+            # Right face: from (hw, th+ey+y) to (tw, hh+ey+y)
+            pygame.draw.line(spr, lc,
+                             (hw, th + ey + y_at_v),
+                             (tw, hh + ey + y_at_v), lw)
+
+    # ------------------------------------------------------------------ #
+    # Sprite makers                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _terrain_spr(
         self,
         terrain: TerrainType,
-        size: int,
+        tw: int,
+        th: int,
         variant: int,
-        same_neighbors: dict[str, bool] | None,
+        same_neighbors: dict | None,
     ) -> pygame.Surface:
-        edge_key = self._edge_key(same_neighbors) if terrain == TerrainType.WATER else None
-        key = ("terrain", terrain, size, variant, edge_key)
-        cached = self.cache.get(key)
-        if cached is not None:
-            return cached
+        spr = pygame.Surface((tw, th), pygame.SRCALPHA)
+        hw, hh = tw // 2, th // 2
+        d = _diam_pts(tw, th)
 
-        sprite = pygame.Surface((size, size))
         if terrain == TerrainType.GRASS:
-            base = COLORS["empty"] if variant % 2 == 0 else COLORS["empty_alt"]
-            sprite.fill(base)
-            self._grass_detail(sprite, size, variant, base)
+            self._draw_grass(spr, tw, th, hw, hh, d, variant)
         elif terrain == TerrainType.WATER:
-            sprite.fill(COLORS["terrain_water"])
-            self._water_detail(sprite, size)
-            self._shore_detail(sprite, size, same_neighbors)
+            self._draw_water(spr, tw, th, hw, hh, d, same_neighbors)
         elif terrain == TerrainType.FOREST:
-            sprite.fill(COLORS["terrain_forest"])
-            self._forest_detail(sprite, size, variant)
+            self._draw_forest(spr, tw, th, hw, hh, d, variant)
         elif terrain == TerrainType.HILL:
-            sprite.fill(COLORS["terrain_hill"])
-            self._hill_detail(sprite, size)
-        self.cache[key] = sprite
-        return sprite
+            self._draw_hill(spr, tw, th, hw, hh, d, variant)
+        return spr
 
-    def _zone_sprite(self, zone: ZoneType, size: int) -> pygame.Surface:
-        key = ("zone", zone, size)
-        cached = self.cache.get(key)
-        if cached is not None:
-            return cached
+    def _draw_grass(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        hw: int,
+        hh: int,
+        d: list,
+        variant: int,
+    ) -> None:
+        base = _GRASS[variant]
+        light = _s(base, 14)
+        shadow = _s(base, -20)
 
-        sprite = pygame.Surface((size, size))
-        base = COLORS[ZONE_COLORS[zone]]
-        sprite.fill(_shift(base, -18))
-        plot = pygame.Rect(max(1, size // 10), max(1, size // 10), size - max(2, size // 5), size - max(2, size // 5))
-        pygame.draw.rect(sprite, base, plot, border_radius=max(1, size // 14))
-        pygame.draw.rect(sprite, COLORS["zone_border"], plot, width=max(1, size // 18), border_radius=max(1, size // 14))
-        if size >= 18:
-            line_color = _shift(base, 28)
-            pygame.draw.line(sprite, line_color, (plot.left + 2, plot.centery), (plot.right - 2, plot.centery), 1)
-            pygame.draw.line(sprite, line_color, (plot.centerx, plot.top + 2), (plot.centerx, plot.bottom - 2), 1)
-            curb = _shift(base, -35)
-            pygame.draw.rect(sprite, curb, pygame.Rect(plot.left, plot.bottom - max(2, size // 12), plot.width, max(2, size // 12)))
-            if zone == ZoneType.RESIDENTIAL:
-                pygame.draw.circle(sprite, (54, 116, 66), (plot.right - size // 6, plot.top + size // 5), max(2, size // 15))
-            elif zone == ZoneType.COMMERCIAL:
-                awning_h = max(2, size // 10)
-                pygame.draw.rect(sprite, (230, 226, 178), pygame.Rect(plot.left + 3, plot.top + 3, plot.width - 6, awning_h))
-            elif zone == ZoneType.INDUSTRIAL:
-                stripe_y = plot.top + 4
-                for stripe_x in range(plot.left + 3, plot.right - 3, max(4, size // 7)):
-                    pygame.draw.line(sprite, (119, 99, 59), (stripe_x, stripe_y), (stripe_x + size // 10, stripe_y + size // 10), 1)
-        self.cache[key] = sprite
-        return sprite
+        # Fill full diamond
+        pygame.draw.polygon(spr, base, d)
 
-    def _zone_building_sprite(self, zone: ZoneType, size: int, stage: int, variant: int) -> pygame.Surface:
-        key = ("zone_building", zone, size, stage, variant % TERRAIN_VARIANTS)
-        cached = self.cache.get(key)
-        if cached is not None:
-            return cached
+        # Light NE half (north vertex → east vertex)
+        ne_face = [(hw, 0), (tw, hh), (hw, hh), (hw, 0)]
+        pygame.draw.polygon(spr, light, ne_face)
 
-        sprite = pygame.Surface((size, size), pygame.SRCALPHA)
+        # Shadow SW half (south vertex → west vertex)
+        sw_face = [(hw, th), (0, hh), (hw, hh), (hw, th)]
+        pygame.draw.polygon(spr, shadow, sw_face)
+
+        # Blend back to base at center with small mid-diamond
+        mid_shrink = max(1, tw // 12)
+        mid_d = _diam_pts(tw - mid_shrink * 4, th - mid_shrink * 2, mid_shrink)
+        pygame.draw.polygon(spr, base, mid_d)
+
+        # Grass detail marks
+        if tw >= 16:
+            detail_cols = [
+                (_s(base, 20), _s(base, -10)),
+                (_s(base, 15), _s(base, -8)),
+                (_s(base, 25), _s(base, -12)),
+                (_s(base, 18), _s(base, -6)),
+            ][variant]
+            positions = [
+                (tw * 2 // 7, th * 3 // 8),
+                (tw * 5 // 7, th * 2 // 7),
+                (tw * 3 // 7, th * 5 // 7),
+                (tw * 6 // 7, th * 6 // 8),
+            ]
+            lw = max(1, tw // 36)
+            for i, (px, py) in enumerate(positions):
+                c = detail_cols[0] if i % 2 == 0 else detail_cols[1]
+                pygame.draw.line(spr, c, (px, py + 2), (px + lw, py), lw)
+
+    def _draw_water(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        hw: int,
+        hh: int,
+        d: list,
+        sn: dict | None,
+    ) -> None:
+        base = (44, 104, 148)
+        deep = (34, 88, 130)
+        shimmer = (92, 158, 195)
+        foam = (148, 196, 222)
+
+        # Fill with deep water base
+        pygame.draw.polygon(spr, deep, d)
+
+        # Lighter NW half
+        nw_face = [(hw, 0), (0, hh), (hw, hh)]
+        pygame.draw.polygon(spr, base, nw_face)
+
+        # Wave lines — slightly angled to follow diamond
+        if tw >= 12:
+            lw = max(1, tw // 22)
+            for i, frac in enumerate((0.28, 0.62)):
+                wy = int(th * frac)
+                xl = max(tw // 5, int(hw * (1 - (1 - frac) * 0.8)))
+                xr = min(tw * 4 // 5, int(hw * (1 + (1 - frac) * 0.8)))
+                xm = (xl + xr) // 2
+                col = shimmer if i == 0 else foam
+                pygame.draw.line(spr, col, (xl, wy), (xm - 2, wy + 1), lw)
+                pygame.draw.line(spr, col, (xm + 2, wy + 1), (xr, wy), lw)
+
+        # Sparkle dots
+        if tw >= 22:
+            for px, py in ((hw - tw // 6, hh // 2), (hw + tw // 8, hh // 3)):
+                pygame.draw.circle(spr, foam, (px, py), max(1, tw // 28))
+
+        # Shore edges where NOT adjacent to water
+        if sn and tw >= 12:
+            shore = (148, 148, 108)
+            lw = max(2, tw // 14)
+            edges = {
+                "north": ((hw, 0),  (tw, hh)),
+                "east":  ((tw, hh), (hw, th)),
+                "south": ((hw, th), (0,  hh)),
+                "west":  ((0,  hh), (hw, 0)),
+            }
+            for direction, (p1, p2) in edges.items():
+                if not sn.get(direction, True):
+                    pygame.draw.line(spr, shore, p1, p2, lw)
+
+    def _draw_forest(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        hw: int,
+        hh: int,
+        d: list,
+        variant: int,
+    ) -> None:
+        floor_c = (44, 80, 46)
+        floor_s = (36, 64, 38)
+        pygame.draw.polygon(spr, floor_s, d)
+        # Lighter NW floor
+        pygame.draw.polygon(spr, floor_c, [(hw, 0), (0, hh), (hw, hh)])
+        pygame.draw.polygon(spr, floor_c, [(hw, 0), (tw, hh), (hw, hh)])
+
+        if tw < 12:
+            return
+
+        tc = [(32, 88, 44), (38, 100, 50), (28, 78, 40)]
+        hi = [(56, 128, 68), (62, 138, 76), (50, 118, 62)]
+        shadow_c = (24, 60, 30)
+        trunk = (68, 58, 38)
+        r_base = max(4, tw // 8)
+
+        tree_positions = [
+            (hw, hh - th // 5),
+            (hw - tw // 5, hh + th // 10),
+            (hw + tw // 5, hh + th // 10),
+            (hw, hh + th // 4),
+        ]
+        count = 2 + (variant % 2)
+        for i, (px, py) in enumerate(tree_positions[:count]):
+            r = r_base - i * max(0, tw // 28)
+            r = max(3, r)
+            # Shadow below canopy
+            pygame.draw.ellipse(spr, shadow_c,
+                                pygame.Rect(px - r, py + r // 3, r * 2, max(2, r // 2)))
+            # Trunk
+            pygame.draw.rect(spr, trunk,
+                             pygame.Rect(px - 1, py + r // 2, max(2, tw // 28), max(3, th // 6)))
+            # Main canopy
+            pygame.draw.circle(spr, tc[i % 3], (px, py), r)
+            # Highlight
+            pygame.draw.circle(spr, hi[i % 3], (px - r // 3, py - r // 3), max(1, r // 3))
+
+    def _draw_hill(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        hw: int,
+        hh: int,
+        d: list,
+        variant: int,
+    ) -> None:
+        base = (104, 104, 90)
+        lit  = (124, 124, 108)
+        dark = (80, 80, 70)
+        rock = (140, 136, 120)
+
+        pygame.draw.polygon(spr, base, d)
+
+        # NW face lighter
+        pygame.draw.polygon(spr, lit, [(hw, 0), (0, hh), (hw, hh)])
+        # SE face darker
+        pygame.draw.polygon(spr, dark, [(hw, th), (tw, hh), (hw, hh)])
+
+        if tw < 14:
+            return
+
+        # Contour ridgelines
+        lw = max(1, tw // 26)
+        for i, frac in enumerate((0.28, 0.54, 0.78)):
+            y = int(th * frac)
+            xm = int(hw * (1 - abs(frac - 0.5) * 0.6))
+            col = _s(lit, -i * 8) if frac < 0.5 else _s(dark, i * 6)
+            pygame.draw.line(spr, col, (hw - xm, y), (hw + xm, y), lw)
+
+        # Rock highlights
+        if tw >= 20:
+            for rx, ry in ((hw - tw // 6, hh // 2), (hw + tw // 8, th // 3)):
+                pygame.draw.circle(spr, rock, (rx, ry), max(2, tw // 18))
+                pygame.draw.circle(spr, lit, (rx - 1, ry - 1), max(1, tw // 26))
+
+    def _zone_base_spr(self, zone: ZoneType, level: int, tw: int, th: int) -> pygame.Surface:
+        spr = pygame.Surface((tw, th), pygame.SRCALPHA)
+        d = _diam_pts(tw, th)
+        hw, hh = tw // 2, th // 2
+        grass = _GRASS[0]
+        zone_c = COLORS.get(zone.value, (100, 100, 100))
+        blend = tuple(int(grass[i] * 0.5 + zone_c[i] * 0.5) for i in range(3))
+
+        # Directional shading like grass tile
+        pygame.draw.polygon(spr, blend, d)
+        light = _s(blend, 12)
+        shadow = _s(blend, -18)
+        pygame.draw.polygon(spr, light, [(hw, 0), (tw, hh), (hw, hh)])
+        pygame.draw.polygon(spr, shadow, [(hw, th), (0, hh), (hw, hh)])
+        mid = _diam_pts(tw - max(2, tw // 10), th - max(1, th // 8), max(1, th // 16))
+        pygame.draw.polygon(spr, blend, mid)
+
+        # Zone indicator border
+        bw = max(1, tw // 24)
+        pygame.draw.polygon(spr, _s(zone_c, -30), d, bw)
+
+        # Dense: extra inner ring
+        if level > 1 and tw >= 16:
+            inner = _diam_pts(tw - bw * 4, th - bw * 2, bw * 2)
+            pygame.draw.polygon(spr, _s(zone_c, 10), inner, bw)
+
+        # Corner dots marking zone type
+        if tw >= 22:
+            dot_r = max(1, tw // 22)
+            for px, py in ((hw * 3 // 2, hh // 2), (hw // 2, hh * 3 // 2)):
+                pygame.draw.circle(spr, _s(zone_c, 20), (px, py), dot_r)
+
+        return spr
+
+    def _building_spr(
+        self,
+        zone: ZoneType,
+        tw: int,
+        th: int,
+        bh: int,
+        stage: int,
+        level: int,
+        variant: int,
+        extra_h: int,
+    ) -> pygame.Surface:
+        surf_h = th + bh + extra_h
+        spr = pygame.Surface((tw, surf_h), pygame.SRCALPHA)
+        hw, hh = tw // 2, th // 2
+        ey = extra_h
+
+        walls = _ZONE_WALL.get(zone, [(150, 150, 150)])
+        base_w = walls[variant % len(walls)]
+        roof_c = _ZONE_ROOF.get(zone, (80, 80, 80))
+        win_c  = _ZONE_WIN.get(zone, (200, 200, 180))
+        win_dark = _s(win_c, -55)
+
+        # Face colours: top brighter, left mid, right dark
+        top_c   = _s(base_w,  40)
+        left_c  = _s(base_w,   6)
+        right_c = _s(base_w, -50)
+        outline = _s(base_w, -85)
+        story_c = _s(base_w, -38)
+
+        roof  = [(hw, ey),      (tw, hh + ey), (hw, th + ey),      (0, hh + ey)]
+        left  = [(0, hh + ey),  (hw, th + ey), (hw, th + bh + ey), (0, hh + bh + ey)]
+        right = [(tw, hh + ey), (hw, th + ey), (hw, th + bh + ey), (tw, hh + bh + ey)]
+
+        pygame.draw.polygon(spr, right_c, right)
+        pygame.draw.polygon(spr, left_c,  left)
+        pygame.draw.polygon(spr, top_c,   roof)
+
+        # Subtle top-lighting gradient: lighter strip at top of each wall face,
+        # darker strip at the bottom (simulates light coming from above).
+        if bh >= 10:
+            grad_h = max(2, bh // 5)
+            # Left face: top strip lighter, bottom strip darker
+            left_top = [(0, hh+ey), (hw, th+ey), (hw, th+ey+grad_h), (0, hh+ey+grad_h)]
+            left_bot = [(0, hh+bh+ey-grad_h), (hw, th+bh+ey-grad_h), (hw, th+bh+ey), (0, hh+bh+ey)]
+            pygame.draw.polygon(spr, _s(left_c,  18), left_top)
+            pygame.draw.polygon(spr, _s(left_c, -18), left_bot)
+            # Right face: same idea
+            right_top = [(tw, hh+ey), (hw, th+ey), (hw, th+ey+grad_h), (tw, hh+ey+grad_h)]
+            right_bot = [(tw, hh+bh+ey-grad_h), (hw, th+bh+ey-grad_h), (hw, th+bh+ey), (tw, hh+bh+ey)]
+            pygame.draw.polygon(spr, _s(right_c,  16), right_top)
+            pygame.draw.polygon(spr, _s(right_c, -12), right_bot)
+
+        # Windows on wall faces
+        n_floors = max(1, bh // max(1, th // 2))
         if zone == ZoneType.RESIDENTIAL:
-            self._draw_house(sprite, size, stage, variant)
+            nc, nr = max(1, min(3, tw // 22)), max(1, min(4, n_floors))
+            self._left_windows(spr, tw, bh, hw, hh, ey, win_c, nc, nr)
+            self._right_windows(spr, tw, th, bh, hw, hh, ey, _s(win_c, -25), nc, nr)
         elif zone == ZoneType.COMMERCIAL:
-            self._draw_commercial(sprite, size, stage, variant)
+            nc = max(1, min(5, tw // 16))
+            nr = max(1, min(6, n_floors * 2))
+            self._left_windows(spr, tw, bh, hw, hh, ey, win_c, nc, nr)
+            self._right_windows(spr, tw, th, bh, hw, hh, ey, _s(win_c, -30), nc, nr)
         elif zone == ZoneType.INDUSTRIAL:
-            self._draw_industrial(sprite, size, stage, variant)
-        self.cache[key] = sprite
-        return sprite
+            nc = max(1, min(2, tw // 28))
+            nr = max(1, min(3, n_floors))
+            self._left_windows(spr, tw, bh, hw, hh, ey, win_c, nc, nr)
+            self._right_windows(spr, tw, th, bh, hw, hh, ey, _s(win_c, -30), max(1, nc - 1), nr)
 
-    def _civic_sprite(self, building: BuildingType, size: int) -> pygame.Surface:
-        key = ("civic", building, size)
-        cached = self.cache.get(key)
-        if cached is not None:
-            return cached
+        # Story divider lines
+        if bh >= 18 and n_floors >= 2:
+            self._story_lines(spr, tw, th, bh, hw, hh, ey, story_c, min(n_floors, 5))
 
-        sprite = pygame.Surface((size, size), pygame.SRCALPHA)
-        color = COLORS[BUILDING_COLORS[building]]
-        sprite.fill(color)
-        shadow = pygame.Rect(size // 5 + 2, size // 4 + 2, size * 3 // 5, size // 2)
-        body = pygame.Rect(size // 5, size // 4, size * 3 // 5, size // 2)
-        pygame.draw.rect(sprite, COLORS["shadow"], shadow, border_radius=max(1, size // 12))
-        pygame.draw.rect(sprite, COLORS["building_light"], body, border_radius=max(1, size // 12))
-        pygame.draw.rect(sprite, COLORS["building_dark"], body, width=max(1, size // 20), border_radius=max(1, size // 12))
-        self._draw_civic_roof(sprite, building, body, color, size)
-        if size >= 22:
-            label = BUILDING_LABELS[building]
-            text = self.font.render(label, True, COLORS["building_dark"])
-            sprite.blit(text, (size // 2 - text.get_width() // 2, size // 2 - text.get_height() // 2))
-        self.cache[key] = sprite
-        return sprite
+        # Face outlines
+        pygame.draw.polygon(spr, outline, right, 1)
+        pygame.draw.polygon(spr, outline, left,  1)
+        pygame.draw.polygon(spr, outline, roof,  1)
+        # Bottom edge
+        pygame.draw.line(spr, outline, (0, hh + bh + ey), (hw, th + bh + ey), 1)
+        pygame.draw.line(spr, outline, (tw, hh + bh + ey), (hw, th + bh + ey), 1)
 
-    def _road_sprite(self, size: int, connections: dict[str, bool]) -> pygame.Surface:
-        key = (
-            "road",
-            size,
-            connections["north"],
-            connections["east"],
-            connections["south"],
-            connections["west"],
-        )
-        cached = self.cache.get(key)
-        if cached is not None:
-            return cached
+        # Zone-specific details
+        if zone == ZoneType.RESIDENTIAL:
+            self._res_det(spr, tw, th, bh, hw, hh, stage, variant, roof_c, ey)
+        elif zone == ZoneType.COMMERCIAL:
+            self._com_det(spr, tw, th, bh, hw, hh, stage, variant, ey)
+        elif zone == ZoneType.INDUSTRIAL:
+            self._ind_det(spr, tw, th, bh, hw, hh, stage, variant, ey)
+        elif zone == ZoneType.PARK:
+            self._park_det(spr, tw, th, bh, hw, hh, stage, ey)
+        return spr
 
-        sprite = pygame.Surface((size, size), pygame.SRCALPHA)
-        road_width = max(6, int(size * 0.48))
-        curb_width = road_width + max(2, size // 10)
-        half_road = road_width // 2
-        half_curb = curb_width // 2
-        center = size // 2
-        curb = _shift(COLORS["road"], 28)
-
-        self._draw_road_parts(sprite, size, center, half_curb, curb, connections)
-        self._draw_road_parts(sprite, size, center, half_road, COLORS["road"], connections)
-        if size >= 18:
-            self._draw_crosswalks(sprite, size, center, half_road, connections)
-            self._draw_lane_markings(sprite, size, center, connections)
-        self.cache[key] = sprite
-        return sprite
-
-    def _utility_sprite(self, utility: str, size: int, connections: dict[str, bool]) -> pygame.Surface:
-        key = (
-            "utility",
-            utility,
-            size,
-            connections["north"],
-            connections["east"],
-            connections["south"],
-            connections["west"],
-        )
-        cached = self.cache.get(key)
-        if cached is not None:
-            return cached
-
-        sprite = pygame.Surface((size, size), pygame.SRCALPHA)
-        if utility == "power":
-            color = COLORS["power"]
-            shadow = (95, 78, 32)
-            line_width = max(2, size // 12)
-            node_radius = max(3, size // 9)
-        else:
-            color = COLORS["water"]
-            shadow = (31, 76, 98)
-            line_width = max(3, size // 9)
-            node_radius = max(3, size // 11)
-
-        self._draw_utility_parts(sprite, size, connections, shadow, line_width + 2, node_radius + 1)
-        self._draw_utility_parts(sprite, size, connections, color, line_width, node_radius)
-        if utility == "power" and size >= 20:
-            center = size // 2
-            pole_w = max(2, size // 12)
-            pygame.draw.rect(sprite, (96, 79, 48), pygame.Rect(center - pole_w // 2, center - size // 5, pole_w, size * 2 // 5))
-            pygame.draw.line(sprite, color, (center - size // 6, center - size // 7), (center + size // 6, center - size // 7), max(1, size // 24))
-        elif utility == "water" and size >= 20:
-            center = size // 2
-            pygame.draw.circle(sprite, (150, 213, 233), (center - size // 8, center - size // 10), max(1, size // 18))
-        self.cache[key] = sprite
-        return sprite
-
-    def _edge_key(self, same_neighbors: dict[str, bool] | None) -> tuple[bool, bool, bool, bool] | None:
-        if same_neighbors is None:
-            return None
-        return (
-            same_neighbors["north"],
-            same_neighbors["east"],
-            same_neighbors["south"],
-            same_neighbors["west"],
-        )
-
-    def _grass_detail(self, sprite: pygame.Surface, size: int, variant: int, base: tuple[int, int, int]) -> None:
-        if size < 12:
-            return
-        blade_color = _shift(base, 18)
-        dark_blade = _shift(base, -13)
-        points = (
-            (size // 5, size // 4),
-            (size * 3 // 5, size // 5),
-            (size // 3, size * 2 // 3),
-            (size * 4 // 5, size * 3 // 4),
-        )
-        for index, (px, py) in enumerate(points):
-            color = blade_color if (index + variant) % 2 == 0 else dark_blade
-            pygame.draw.line(sprite, color, (px, py + 2), (px + max(1, size // 14), py), max(1, size // 28))
-        if size >= 24 and variant in (1, 3):
-            flower_color = (220, 209, 130) if variant == 1 else (196, 151, 202)
-            pygame.draw.circle(sprite, flower_color, (size * 3 // 4, size // 3), max(1, size // 24))
-            pygame.draw.circle(sprite, flower_color, (size // 4, size * 3 // 4), max(1, size // 26))
-
-    def _water_detail(self, sprite: pygame.Surface, size: int) -> None:
-        if size < 12:
-            return
-        outline_width = max(1, size // 22)
-        wave_width = max(1, size // 18)
-        pygame.draw.rect(sprite, (36, 87, 119), sprite.get_rect(), width=outline_width)
-        for index, offset in enumerate((-size // 6, size // 8)):
-            y = size // 2 + offset
-            start_x = 5 + index * 3
-            pygame.draw.line(sprite, (102, 169, 198), (start_x, y), (size // 2 - 2, y + 1), wave_width)
-            pygame.draw.line(sprite, (102, 169, 198), (size // 2 + 2, y + 1), (size - 5, y), wave_width)
-        pygame.draw.line(sprite, (67, 135, 170), (size // 5, size - size // 5), (size * 4 // 5, size - size // 4), max(1, size // 26))
-
-    def _shore_detail(self, sprite: pygame.Surface, size: int, same_neighbors: dict[str, bool] | None) -> None:
-        if same_neighbors is None or size < 10:
-            return
-        shore = (144, 145, 102)
-        foam = (138, 197, 215)
-        width = max(2, size // 12)
-        thin = max(1, size // 24)
-        if not same_neighbors["north"]:
-            pygame.draw.rect(sprite, shore, pygame.Rect(0, 0, size, width))
-            pygame.draw.line(sprite, foam, (2, width + 1), (size - 2, width + 1), thin)
-        if not same_neighbors["east"]:
-            pygame.draw.rect(sprite, shore, pygame.Rect(size - width, 0, width, size))
-            pygame.draw.line(sprite, foam, (size - width - 1, 2), (size - width - 1, size - 2), thin)
-        if not same_neighbors["south"]:
-            pygame.draw.rect(sprite, shore, pygame.Rect(0, size - width, size, width))
-            pygame.draw.line(sprite, foam, (2, size - width - 1), (size - 2, size - width - 1), thin)
-        if not same_neighbors["west"]:
-            pygame.draw.rect(sprite, shore, pygame.Rect(0, 0, width, size))
-            pygame.draw.line(sprite, foam, (width + 1, 2), (width + 1, size - 2), thin)
-
-    def _forest_detail(self, sprite: pygame.Surface, size: int, variant: int) -> None:
-        if size < 12:
-            return
-        tree_color = (34, 77, 46)
-        highlight = (56, 122, 70)
-        trunk = (76, 69, 47)
-        centers = (
-            (size // 2, size // 3),
-            (size // 3, size * 3 // 5),
-            (size * 2 // 3, size * 3 // 5),
-        )
-        radius = max(3, size // 8)
-        for index, center in enumerate(centers[: 2 + variant % 2]):
-            pygame.draw.rect(sprite, trunk, pygame.Rect(center[0] - 1, center[1], max(2, size // 12), size // 5))
-            pygame.draw.circle(sprite, tree_color, center, radius)
-            pygame.draw.circle(sprite, highlight, (center[0] - radius // 3, center[1] - radius // 3), max(1, radius // 3))
-        if size >= 24:
-            pygame.draw.circle(sprite, (25, 58, 36), (size // 5, size // 5), max(2, size // 12))
-
-    def _hill_detail(self, sprite: pygame.Surface, size: int) -> None:
-        if size < 12:
-            return
-        line_width = max(1, size // 18)
-        light = (152, 153, 132)
-        dark = (89, 91, 80)
-        points = [
-            (size // 5, size * 2 // 3),
-            (size // 2, size // 4),
-            (size * 4 // 5, size * 2 // 3),
-        ]
-        pygame.draw.lines(sprite, dark, False, [(x, y + 2) for x, y in points], line_width)
-        pygame.draw.lines(sprite, light, False, points, line_width)
-        pygame.draw.arc(sprite, light, pygame.Rect(size // 4, size // 2, size // 2, size // 4), 3.2, 6.2, line_width)
-        if size >= 24:
-            pygame.draw.line(sprite, dark, (size // 2, size // 4 + 2), (size * 3 // 5, size // 2), max(1, size // 24))
-
-    def _draw_house(self, sprite: pygame.Surface, size: int, stage: int, variant: int) -> None:
-        width = size // 3 + stage * size // 18
-        height = size // 4 + stage * size // 20
-        x_shift = ((variant % 3) - 1) * max(1, size // 24)
-        body = pygame.Rect(size // 2 - width // 2 + x_shift, size - height - size // 6, width, height)
-        wall_palette = ((219, 226, 205), (226, 213, 190), (203, 221, 221), (224, 205, 203))
-        roof_palette = ((129, 72, 58), (111, 82, 68), (92, 85, 96), (145, 88, 58))
-        if stage >= 3 and size >= 24:
-            garage = pygame.Rect(body.right - size // 8, body.bottom - size // 5, size // 5, size // 6)
-            pygame.draw.rect(sprite, COLORS["shadow"], garage.move(1, 1))
-            pygame.draw.rect(sprite, (196, 201, 186), garage)
-        roof = [
-            (body.left - size // 12, body.top),
-            (body.centerx, body.top - size // 5),
-            (body.right + size // 12, body.top),
-        ]
-        pygame.draw.rect(sprite, COLORS["shadow"], body.move(2, 2), border_radius=1)
-        pygame.draw.rect(sprite, wall_palette[variant % len(wall_palette)], body, border_radius=1)
-        pygame.draw.polygon(sprite, roof_palette[variant % len(roof_palette)], roof)
-        if size >= 24:
-            pygame.draw.rect(sprite, (72, 114, 143), pygame.Rect(body.left + width // 5, body.top + height // 3, 3, 3))
-            pygame.draw.rect(sprite, (72, 114, 143), pygame.Rect(body.right - width // 4, body.top + height // 3, 3, 3))
-            pygame.draw.rect(sprite, (92, 69, 49), pygame.Rect(body.centerx - 1, body.bottom - height // 4, 3, height // 4))
-        if stage >= 4 and size >= 26:
-            porch = pygame.Rect(body.left - size // 8, body.bottom - size // 6, body.width + size // 4, max(2, size // 10))
-            pygame.draw.rect(sprite, (186, 168, 121), porch)
-
-    def _draw_commercial(self, sprite: pygame.Surface, size: int, stage: int, variant: int) -> None:
-        width = size // 3 + stage * size // 12
-        height = size // 4 + stage * size // 10
-        body = pygame.Rect(size // 2 - width // 2, size - height - size // 7, width, height)
-        glass_palette = ((83, 137, 178), (86, 151, 157), (111, 129, 180), (75, 122, 164))
-        facade_palette = ((202, 216, 222), (217, 213, 194), (204, 212, 226), (198, 219, 211))
-        pygame.draw.rect(sprite, COLORS["shadow"], body.move(2, 2))
-        pygame.draw.rect(sprite, facade_palette[variant % len(facade_palette)], body)
-        roof = pygame.Rect(body.left, body.top, body.width, max(3, size // 8))
-        pygame.draw.rect(sprite, (68, 89, 102), roof)
-        pygame.draw.rect(sprite, COLORS["building_dark"], body, width=max(1, size // 24))
-        if size >= 22:
-            window = max(2, size // 12)
-            for wx in range(body.left + 4, body.right - window, window + 3):
-                for wy in range(body.top + 4, body.bottom - window, window + 3):
-                    pygame.draw.rect(sprite, glass_palette[variant % len(glass_palette)], pygame.Rect(wx, wy, window, window))
-            sign = pygame.Rect(body.left + 3, body.bottom - max(5, size // 5), body.width - 6, max(3, size // 9))
-            sign_palette = ((233, 199, 92), (218, 126, 101), (126, 184, 143), (180, 149, 214))
-            pygame.draw.rect(sprite, sign_palette[variant % len(sign_palette)], sign, border_radius=1)
-            if stage >= 3:
-                antenna_x = body.centerx
-                pygame.draw.line(sprite, (50, 58, 64), (antenna_x, body.top), (antenna_x, body.top - size // 6), max(1, size // 26))
-
-    def _draw_industrial(self, sprite: pygame.Surface, size: int, stage: int, variant: int) -> None:
-        width = size // 2 + stage * size // 16
-        height = size // 4 + stage * size // 18
-        body = pygame.Rect(size // 2 - width // 2, size - height - size // 7, width, height)
-        stack_left = body.right - size // 5 if variant % 2 == 0 else body.left + size // 10
-        stack = pygame.Rect(stack_left, body.top - size // 5, max(3, size // 9), size // 4)
-        pygame.draw.rect(sprite, COLORS["shadow"], body.move(2, 2))
-        pygame.draw.rect(sprite, (159, 149, 123), body)
-        pygame.draw.rect(sprite, (102, 99, 88), stack)
-        roof_points = [
-            (body.left, body.top),
-            (body.left + width // 4, body.top - size // 7),
-            (body.left + width // 2, body.top),
-            (body.left + width * 3 // 4, body.top - size // 7),
-            (body.right, body.top),
-        ]
-        pygame.draw.lines(sprite, COLORS["building_dark"], False, roof_points, max(1, size // 22))
-        if size >= 22:
-            pygame.draw.circle(sprite, (125, 128, 119), (stack.centerx, max(2, stack.top - size // 8)), max(2, size // 13))
-            door = pygame.Rect(body.left + size // 8, body.bottom - size // 5, size // 5, size // 5)
-            pygame.draw.rect(sprite, (88, 82, 72), door)
-            for stripe in range(door.left, door.right, max(3, size // 12)):
-                pygame.draw.line(sprite, (211, 174, 77), (stripe, door.top), (stripe + size // 12, door.bottom), 1)
-            if stage >= 3:
-                pygame.draw.circle(sprite, (151, 154, 141), (stack.centerx + size // 8, max(2, stack.top - size // 5)), max(2, size // 14))
-
-    def _draw_civic_roof(
+    def _civic_spr(
         self,
-        sprite: pygame.Surface,
         building: BuildingType,
-        body: pygame.Rect,
-        color: tuple[int, int, int],
-        size: int,
+        tw: int,
+        th: int,
+        bh: int,
+        extra_h: int,
+    ) -> pygame.Surface:
+        surf_h = th + bh + extra_h
+        spr = pygame.Surface((tw, surf_h), pygame.SRCALPHA)
+        hw, hh = tw // 2, th // 2
+        ey = extra_h
+
+        ck = _CIVIC_COLOR_KEY.get(building, "building_dark")
+        base_c = COLORS.get(ck, (80, 80, 80))
+
+        top_c   = _s(base_c,  45)
+        left_c  = base_c
+        right_c = _s(base_c, -55)
+        outline = _s(base_c, -90)
+        story_c = _s(base_c, -40)
+
+        roof  = [(hw, ey),      (tw, hh + ey), (hw, th + ey),      (0, hh + ey)]
+        left  = [(0, hh + ey),  (hw, th + ey), (hw, th + bh + ey), (0, hh + bh + ey)]
+        right = [(tw, hh + ey), (hw, th + ey), (hw, th + bh + ey), (tw, hh + bh + ey)]
+
+        pygame.draw.polygon(spr, right_c, right)
+        pygame.draw.polygon(spr, left_c,  left)
+        pygame.draw.polygon(spr, top_c,   roof)
+
+        # Civic windows (sparse)
+        win_c = _s(base_c, 80)
+        if tw >= 18 and bh >= 12:
+            n_floors = max(1, bh // max(1, th // 2))
+            nc = max(1, min(3, tw // 24))
+            nr = max(1, min(4, n_floors))
+            self._left_windows(spr, tw, bh, hw, hh, ey, win_c, nc, nr)
+            self._right_windows(spr, tw, th, bh, hw, hh, ey, _s(win_c, -30), nc, nr)
+            if n_floors >= 2:
+                self._story_lines(spr, tw, th, bh, hw, hh, ey, story_c, min(n_floors, 4))
+
+        pygame.draw.polygon(spr, outline, right, 1)
+        pygame.draw.polygon(spr, outline, left,  1)
+        pygame.draw.polygon(spr, outline, roof,  1)
+        pygame.draw.line(spr, outline, (0, hh + bh + ey), (hw, th + bh + ey), 1)
+        pygame.draw.line(spr, outline, (tw, hh + bh + ey), (hw, th + bh + ey), 1)
+
+        self._civic_det(spr, building, tw, th, bh, hw, hh, base_c, ey)
+
+        if tw >= 24:
+            label = _CIVIC_LABEL.get(building, "?")
+            text = self.font.render(label, True, (245, 245, 240))
+            sx = hw - text.get_width() // 2
+            sy = ey + max(2, bh // 4 - text.get_height() // 2)
+            # Drop shadow
+            spr.blit(self.font.render(label, True, outline), (sx + 1, sy + 1))
+            spr.blit(text, (sx, sy))
+        return spr
+
+    def _road_spr(self, tw: int, th: int, connections: dict[str, bool]) -> pygame.Surface:
+        spr = pygame.Surface((tw, th), pygame.SRCALPHA)
+        hw, hh = tw // 2, th // 2
+        d = _diam_pts(tw, th)
+
+        # Sidewalk (outer ring)
+        sidewalk_c = (158, 155, 142)
+        pygame.draw.polygon(spr, sidewalk_c, d)
+
+        # Asphalt core (slightly inset diamond)
+        inset = max(2, tw // 14)
+        asphalt_c = (54, 58, 65)
+        asphalt_d = [(hw, inset), (tw - inset, hh), (hw, th - inset), (inset, hh)]
+        pygame.draw.polygon(spr, asphalt_c, asphalt_d)
+
+        if tw >= 14:
+            center = (hw, hh)
+            edge_mids = {
+                "north": (tw * 3 // 4, th // 4),
+                "east":  (tw * 3 // 4, th * 3 // 4),
+                "south": (tw // 4,     th * 3 // 4),
+                "west":  (tw // 4,     th // 4),
+            }
+            arm = max(2, tw // 10)
+            arm_sw = max(2, arm + 2)  # sidewalk arm slightly wider
+
+            for direction, ep in edge_mids.items():
+                if not connections.get(direction, False):
+                    continue
+                dx, dy = ep[0] - center[0], ep[1] - center[1]
+                length = max(1.0, math.sqrt(dx * dx + dy * dy))
+                nx = -dy / length
+                ny =  dx / length
+
+                # Sidewalk strip
+                sw_pts = [
+                    (int(center[0] + nx * arm_sw), int(center[1] + ny * arm_sw)),
+                    (int(ep[0]     + nx * arm_sw), int(ep[1]     + ny * arm_sw)),
+                    (int(ep[0]     - nx * arm_sw), int(ep[1]     - ny * arm_sw)),
+                    (int(center[0] - nx * arm_sw), int(center[1] - ny * arm_sw)),
+                ]
+                pygame.draw.polygon(spr, sidewalk_c, sw_pts)
+
+                # Asphalt strip
+                asp_pts = [
+                    (int(center[0] + nx * arm), int(center[1] + ny * arm)),
+                    (int(ep[0]     + nx * arm), int(ep[1]     + ny * arm)),
+                    (int(ep[0]     - nx * arm), int(ep[1]     - ny * arm)),
+                    (int(center[0] - nx * arm), int(center[1] - ny * arm)),
+                ]
+                pygame.draw.polygon(spr, asphalt_c, asp_pts)
+
+            # Intersection node
+            pygame.draw.circle(spr, asphalt_c, center, arm + 1)
+
+            # Centre lane markings
+            if tw >= 22:
+                lane_c = (195, 180, 100)
+                for direction, ep in edge_mids.items():
+                    if connections.get(direction, False):
+                        mx = (center[0] * 2 + ep[0]) // 3
+                        my = (center[1] * 2 + ep[1]) // 3
+                        lw = max(1, tw // 30)
+                        pygame.draw.circle(spr, lane_c, (mx, my), lw)
+
+        # Sidewalk outline along diamond edge
+        pygame.draw.polygon(spr, (132, 128, 116), d, max(1, tw // 38))
+        return spr
+
+    # ------------------------------------------------------------------ #
+    # Building details                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _res_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        variant: int,
+        roof_c: tuple,
+        ey: int,
     ) -> None:
-        accent = _shift(color, -22)
-        if building in (BuildingType.WATER_TOWER, BuildingType.LARGE_WATER_TOWER):
-            tank = pygame.Rect(body.centerx - size // 5, body.top - size // 7, size * 2 // 5, size // 4)
-            if building == BuildingType.LARGE_WATER_TOWER:
-                tank = tank.inflate(size // 7, size // 12)
-            pygame.draw.ellipse(sprite, accent, tank)
-            pygame.draw.ellipse(sprite, _shift(accent, 28), tank.inflate(-max(2, size // 10), -max(2, size // 12)))
-            pygame.draw.line(sprite, COLORS["building_dark"], (tank.left + 2, tank.bottom), (body.left + 3, body.bottom), max(1, size // 22))
-            pygame.draw.line(sprite, COLORS["building_dark"], (tank.right - 2, tank.bottom), (body.right - 3, body.bottom), max(1, size // 22))
-        elif building in (BuildingType.POWER_PLANT, BuildingType.LARGE_POWER_PLANT):
-            stack = pygame.Rect(body.right - size // 5, body.top - size // 5, max(3, size // 9), size // 4)
-            pygame.draw.rect(sprite, accent, stack)
-            pygame.draw.circle(sprite, (126, 130, 121), (stack.centerx + size // 8, max(2, stack.top - size // 8)), max(2, size // 13))
-            if building == BuildingType.LARGE_POWER_PLANT:
-                stack_two = stack.move(-size // 4, size // 12)
-                pygame.draw.rect(sprite, _shift(accent, -12), stack_two)
-                pygame.draw.circle(sprite, (126, 130, 121), (stack_two.centerx + size // 8, max(2, stack_two.top - size // 8)), max(2, size // 13))
+        if tw >= 16:
+            # Peaked roof over the top diamond face
+            peak = min(ey, max(4, bh // 4))
+            pk_top = (hw, ey - peak)
+            roof_pts = [pk_top, (0, hh + ey), (hw, th + ey), (tw, hh + ey)]
+            pygame.draw.polygon(spr, roof_c, roof_pts)
+            # Ridge shadow side (right half)
+            ridge_r = [pk_top, (hw, th + ey), (tw, hh + ey)]
+            pygame.draw.polygon(spr, _s(roof_c, -28), ridge_r)
+            pygame.draw.polygon(spr, _s(roof_c, -50), roof_pts, 1)
+            # Ridge line
+            pygame.draw.line(spr, _s(roof_c, -38), pk_top, (hw, th + ey), max(1, tw // 30))
+
+        # Chimney
+        if tw >= 22 and stage >= 2:
+            ch_w = max(2, tw // 16)
+            ch_x = hw + tw // 6
+            ch_top = max(0, ey - max(3, bh // 8))
+            ch_bot = ey + max(1, th // 8)
+            pygame.draw.rect(spr, _s(roof_c, -20), pygame.Rect(ch_x, ch_top, ch_w, ch_bot - ch_top))
+            pygame.draw.line(spr, _s(roof_c, 15), (ch_x, ch_top), (ch_x + ch_w, ch_top), max(1, tw // 30))
+
+        # Doorway hint at bottom of left face
+        if tw >= 26 and stage >= 2:
+            door_c = (60, 50, 40)
+            dw = max(2, tw // 14)
+            dh = max(3, bh // 6)
+            dx = max(1, tw // 10)
+            dy = th + bh + ey - dh
+            pygame.draw.rect(spr, door_c, pygame.Rect(dx, dy, dw, dh), border_radius=1)
+
+    def _com_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        variant: int,
+        ey: int,
+    ) -> None:
+        # Flat roof with parapet
+        if tw >= 16:
+            roof_dark = (52, 68, 88)
+            # Roof surface fill (slightly darker than top face)
+            pygame.draw.polygon(spr, roof_dark,
+                                [(hw, ey), (tw, hh + ey), (hw, th + ey), (0, hh + ey)])
+            # Parapet (raised border)
+            par_h = max(2, bh // 10)
+            par_pts_l = [(0, hh + ey), (hw, th + ey), (hw, th + ey - par_h), (0, hh + ey - par_h)]
+            par_pts_r = [(tw, hh + ey), (hw, th + ey), (hw, th + ey - par_h), (tw, hh + ey - par_h)]
+            pygame.draw.polygon(spr, _s(roof_dark, 25), par_pts_l)
+            pygame.draw.polygon(spr, _s(roof_dark, 8), par_pts_r)
+            pygame.draw.polygon(spr, _s(roof_dark, -20), par_pts_l, 1)
+            pygame.draw.polygon(spr, _s(roof_dark, -20), par_pts_r, 1)
+
+        # Rooftop HVAC / antenna
+        if tw >= 22 and stage >= 3:
+            spire_h = min(ey, max(4, tw // 9))
+            pygame.draw.line(spr, (72, 80, 92), (hw, ey), (hw, ey - spire_h), max(1, tw // 26))
+            pygame.draw.circle(spr, (88, 100, 112), (hw, ey - spire_h), max(1, tw // 28))
+
+        if tw >= 20 and stage >= 2:
+            # Rooftop AC unit
+            ac_c = (78, 90, 104)
+            aw = max(3, tw // 12)
+            ax = hw - aw // 2
+            ay = th + ey - aw - max(1, bh // 10)
+            pygame.draw.rect(spr, ac_c, pygame.Rect(ax, ay, aw, aw), border_radius=1)
+
+    def _ind_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        variant: int,
+        ey: int,
+    ) -> None:
+        if tw < 12:
+            return
+
+        # Corrugated roof lines on top face
+        if tw >= 18:
+            ridge_c = _s((82, 78, 65), -15)
+            n_ridges = max(1, tw // 14)
+            for i in range(n_ridges):
+                u = (i + 0.5) / n_ridges
+                p1 = (int(u * hw), int(hh + ey + u * hh))
+                p2 = (int(hw + u * hw), int(th + ey - u * hh))
+                pygame.draw.line(spr, ridge_c, p1, p2, 1)
+
+        # Smokestacks
+        sc = (72, 68, 58)
+        sh = max(4, bh // 3)
+        sw = max(2, tw // 14)
+        offsets = [hw + hw // 3, hw - hw // 5] if stage >= 3 else [hw + hw // 3]
+        for i, ox in enumerate(offsets[:min(len(offsets), stage)]):
+            top = max(0, ey - sh + i * 2)
+            bot = ey + max(2, th // 6)
+            pygame.draw.rect(spr, sc, pygame.Rect(ox, top, sw, bot - top))
+            # Smoke cap
+            pygame.draw.ellipse(spr, _s(sc, 25), pygame.Rect(ox - sw // 2, top - sw // 2, sw * 2, sw))
+            pygame.draw.line(spr, (102, 98, 88), (ox, top), (ox + sw, top), max(1, tw // 30))
+
+        # Warning stripe on bottom of left wall
+        if tw >= 20 and stage >= 2:
+            stripe_h = max(2, bh // 8)
+            stripe_y = th + bh + ey - stripe_h
+            n_stripes = max(2, tw // 16)
+            for i in range(n_stripes):
+                u = i / n_stripes
+                x1 = int(u * hw)
+                x2 = int((u + 1.0 / n_stripes) * hw)
+                y1 = int(hh + ey + u * hh + (1.0 - stripe_h / bh) * bh)
+                y2 = int(hh + ey + (u + 1.0 / n_stripes) * hh + (1.0 - stripe_h / bh) * bh)
+                c = (220, 180, 40) if i % 2 == 0 else (40, 40, 40)
+                pygame.draw.polygon(spr, c, [(x1, y1), (x2, y2), (x2, y2 + stripe_h), (x1, y1 + stripe_h)])
+
+    def _park_det(
+        self,
+        spr: pygame.Surface,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        stage: int,
+        ey: int,
+    ) -> None:
+        if tw < 12:
+            return
+        # Park pavilion - no solid walls, just a canopy structure
+        # Draw canopy roof in green (already has the top face)
+        # Draw slender pillars on each corner
+        if tw >= 16:
+            pillar_c = (148, 138, 115)
+            pw = max(1, tw // 20)
+            pillar_positions = [(tw // 8, hh + ey), (tw * 7 // 8, hh + ey),
+                                (hw, th + ey)]
+            for px, py in pillar_positions:
+                pygame.draw.rect(spr, pillar_c, pygame.Rect(px - pw // 2, py, pw, bh))
+
+        tc = (38, 90, 50)
+        hi = (60, 126, 74)
+        shadow_c = (28, 66, 36)
+        trunk = (72, 62, 42)
+        r = max(4, tw // 7)
+
+        positions = [
+            (hw,           ey + bh // 4),
+            (hw - tw // 5, ey + bh * 3 // 5),
+            (hw + tw // 5, ey + bh * 3 // 5),
+        ]
+        for i, (px, py) in enumerate(positions[:min(len(positions), stage + 1)]):
+            r_i = max(3, r - i)
+            pygame.draw.ellipse(spr, shadow_c,
+                                pygame.Rect(px - r_i, py + r_i // 3, r_i * 2, max(2, r_i // 2)))
+            pygame.draw.rect(spr, trunk,
+                             pygame.Rect(px - 1, py + r_i // 2, max(2, tw // 26), max(3, th // 5)))
+            pygame.draw.circle(spr, tc, (px, py), r_i)
+            pygame.draw.circle(spr, hi, (px - r_i // 3, py - r_i // 3), max(1, r_i // 3))
+
+    def _civic_det(
+        self,
+        spr: pygame.Surface,
+        building: BuildingType,
+        tw: int,
+        th: int,
+        bh: int,
+        hw: int,
+        hh: int,
+        color: tuple,
+        ey: int,
+    ) -> None:
+        if building in (BuildingType.POWER_PLANT, BuildingType.LARGE_POWER_PLANT):
+            # Red & white striped chimney
+            stripe_c = [(210, 60, 50), (240, 240, 240)]
+            sh = min(ey, max(6, bh // 3))
+            sw = max(3, tw // 11)
+            sx = hw + hw // 3
+            top = max(0, ey - sh)
+            bot = ey + max(2, th // 6)
+            n_stripes = max(2, sh // 6)
+            for i in range(n_stripes):
+                seg_top = top + i * (bot - top) // n_stripes
+                seg_bot = top + (i + 1) * (bot - top) // n_stripes
+                pygame.draw.rect(spr, stripe_c[i % 2],
+                                 pygame.Rect(sx, seg_top, sw, seg_bot - seg_top))
+            # Top ring
+            pygame.draw.ellipse(spr, (110, 108, 98),
+                                pygame.Rect(sx - sw // 2, top - sw // 3, sw * 2, sw * 2 // 3))
+
+            # Glow dots at top if large
+            if building == BuildingType.LARGE_POWER_PLANT and tw >= 22:
+                pygame.draw.circle(spr, (255, 230, 80), (sx + sw // 2, top - 1), max(2, tw // 20))
+
+        elif building in (BuildingType.WATER_TOWER, BuildingType.LARGE_WATER_TOWER):
+            # Cylindrical tank with legs
+            tank_r = max(5, tw // 6) if building == BuildingType.LARGE_WATER_TOWER else max(4, tw // 8)
+            tank_cy = max(tank_r + 1, ey - tank_r // 2)
+
+            # Legs
+            leg_c = _s(color, -25)
+            for lx in (hw - tank_r // 2, hw + tank_r // 2):
+                leg_top = min(tank_cy, ey - 2)
+                leg_bot = ey + hh
+                if leg_bot > leg_top:
+                    pygame.draw.line(spr, leg_c, (lx, leg_top), (lx, leg_bot), max(1, tw // 24))
+
+            # Tank body
+            tank_c = _s(color, 35)
+            pygame.draw.circle(spr, _s(color, -10), (hw, tank_cy + tank_r // 4), tank_r)
+            pygame.draw.ellipse(spr, tank_c,
+                                pygame.Rect(hw - tank_r, tank_cy - tank_r // 2, tank_r * 2, tank_r))
+            # Highlight
+            pygame.draw.circle(spr, _s(color, 65),
+                               (hw - tank_r // 3, tank_cy - tank_r // 3), max(2, tank_r // 3))
+
         elif building == BuildingType.AIRPORT:
-            wing_y = body.centery
-            pygame.draw.line(sprite, accent, (body.left + 3, wing_y), (body.right - 3, wing_y), max(2, size // 9))
-            pygame.draw.line(sprite, accent, (body.centerx, body.top), (body.centerx, body.bottom), max(1, size // 12))
-            pygame.draw.polygon(
-                sprite,
-                _shift(accent, 32),
-                [(body.centerx, body.top - size // 7), (body.centerx - size // 9, body.top + size // 12), (body.centerx + size // 9, body.top + size // 12)],
-            )
-        elif building == BuildingType.TRAIN_STATION:
-            rail_y = body.bottom - size // 8
-            pygame.draw.line(sprite, accent, (body.left + 2, rail_y), (body.right - 2, rail_y), max(1, size // 18))
-            pygame.draw.line(sprite, accent, (body.left + 2, rail_y + 3), (body.right - 2, rail_y + 3), max(1, size // 18))
-            for tie_x in range(body.left + 3, body.right - 2, max(4, size // 7)):
-                pygame.draw.line(sprite, COLORS["building_dark"], (tie_x, rail_y - 2), (tie_x + 2, rail_y + 5), 1)
-        elif building == BuildingType.POLICE:
-            badge = pygame.Rect(body.centerx - size // 9, body.top + size // 8, size // 5, size // 5)
-            pygame.draw.rect(sprite, accent, badge, border_radius=1)
-        elif building == BuildingType.FIRE:
-            door = pygame.Rect(body.centerx - size // 8, body.bottom - size // 4, size // 4, size // 4)
-            pygame.draw.rect(sprite, accent, door)
-            pygame.draw.line(sprite, COLORS["building_light"], (door.centerx, door.top), (door.centerx, door.bottom), 1)
-        elif building == BuildingType.SCHOOL:
-            pygame.draw.polygon(
-                sprite,
-                accent,
-                [(body.left, body.top), (body.centerx, body.top - size // 7), (body.right, body.top)],
-            )
-        else:
-            pygame.draw.rect(sprite, accent, pygame.Rect(body.left, body.top, body.width, max(3, size // 8)))
+            # Runway cross
+            rwy_c = _s(color, -15)
+            lw = max(3, tw // 14)
+            pygame.draw.line(spr, rwy_c,
+                             (tw // 8, ey + bh // 2),
+                             (tw * 7 // 8, ey + bh // 2), lw)
+            pygame.draw.line(spr, rwy_c,
+                             (hw, ey + bh // 8),
+                             (hw, ey + bh * 7 // 8), max(2, lw // 2))
+            # Runway markings
+            if tw >= 26:
+                mk_c = _s(color, 35)
+                for i in range(3):
+                    mx = tw // 8 + i * tw // 4
+                    pygame.draw.line(spr, mk_c,
+                                     (mx, ey + bh // 2 - 1),
+                                     (mx + tw // 12, ey + bh // 2 - 1), max(1, tw // 28))
 
-    def _draw_road_parts(
-        self,
-        sprite: pygame.Surface,
-        size: int,
-        center: int,
-        half_width: int,
-        color: tuple[int, int, int],
-        connections: dict[str, bool],
-    ) -> None:
-        center_rect = pygame.Rect(center - half_width, center - half_width, half_width * 2, half_width * 2)
-        pygame.draw.rect(sprite, color, center_rect)
-        arms = {
-            "north": pygame.Rect(center - half_width, 0, half_width * 2, center),
-            "east": pygame.Rect(center, center - half_width, size - center, half_width * 2),
-            "south": pygame.Rect(center - half_width, center, half_width * 2, size - center),
-            "west": pygame.Rect(0, center - half_width, center, half_width * 2),
-        }
-        for direction, connected in connections.items():
-            if connected:
-                pygame.draw.rect(sprite, color, arms[direction])
+    # ------------------------------------------------------------------ #
+    # Utility helpers                                                      #
+    # ------------------------------------------------------------------ #
 
-    def _draw_utility_parts(
-        self,
-        sprite: pygame.Surface,
-        size: int,
-        connections: dict[str, bool],
-        color: tuple[int, int, int],
-        line_width: int,
-        node_radius: int,
-    ) -> None:
-        center = (size // 2, size // 2)
-        endpoints = {
-            "north": (size // 2, 2),
-            "east": (size - 2, size // 2),
-            "south": (size // 2, size - 2),
-            "west": (2, size // 2),
-        }
-        if not any(connections.values()):
-            pygame.draw.circle(sprite, color, center, node_radius)
-            return
-        for direction, connected in connections.items():
-            if connected:
-                pygame.draw.line(sprite, color, center, endpoints[direction], line_width)
-        pygame.draw.circle(sprite, color, center, node_radius)
+    def _bh(self, zone: ZoneType, stage: int, level: int, th: int) -> int:
+        fracs = _BLD_FRACS.get(zone, [0, 0.8, 1.2, 1.8, 2.4])
+        frac = fracs[min(stage, len(fracs) - 1)]
+        mult = 1.5 if level > 1 else 1.0
+        return max(4, int(th * frac * mult))
 
-    def _draw_crosswalks(
-        self,
-        sprite: pygame.Surface,
-        size: int,
-        center: int,
-        half_road: int,
-        connections: dict[str, bool],
-    ) -> None:
-        if sum(connections.values()) < 3 or size < 24:
-            return
-        stripe_color = (214, 214, 188)
-        stripe_w = max(1, size // 24)
-        stripe_len = max(5, size // 5)
-        gap = max(3, size // 10)
-        for offset in (-gap, 0, gap):
-            if connections["north"]:
-                pygame.draw.line(sprite, stripe_color, (center - stripe_len // 2, center - half_road + offset // 4), (center + stripe_len // 2, center - half_road + offset // 4), stripe_w)
-            if connections["south"]:
-                pygame.draw.line(sprite, stripe_color, (center - stripe_len // 2, center + half_road + offset // 4), (center + stripe_len // 2, center + half_road + offset // 4), stripe_w)
-            if connections["east"]:
-                pygame.draw.line(sprite, stripe_color, (center + half_road + offset // 4, center - stripe_len // 2), (center + half_road + offset // 4, center + stripe_len // 2), stripe_w)
-            if connections["west"]:
-                pygame.draw.line(sprite, stripe_color, (center - half_road + offset // 4, center - stripe_len // 2), (center - half_road + offset // 4, center + stripe_len // 2), stripe_w)
+    def _civic_bh(self, building: BuildingType, th: int) -> int:
+        frac = _CIVIC_HEIGHT.get(building, 1.6)
+        return max(8, int(th * frac))
 
-    def _draw_lane_markings(
-        self,
-        sprite: pygame.Surface,
-        size: int,
-        center: int,
-        connections: dict[str, bool],
-    ) -> None:
-        line_width = max(1, size // 20)
-        margin = max(4, size // 7)
-        if connections["north"]:
-            pygame.draw.line(sprite, COLORS["road_line"], (center, center), (center, margin), line_width)
-        if connections["east"]:
-            pygame.draw.line(sprite, COLORS["road_line"], (center, center), (size - margin, center), line_width)
-        if connections["south"]:
-            pygame.draw.line(sprite, COLORS["road_line"], (center, center), (center, size - margin), line_width)
-        if connections["west"]:
-            pygame.draw.line(sprite, COLORS["road_line"], (center, center), (margin, center), line_width)
+    def _edge_key(self, sn: dict | None) -> tuple | None:
+        if sn is None:
+            return None
+        return (sn.get("north", False), sn.get("east", False),
+                sn.get("south", False), sn.get("west", False))
+
+    def _get(self, key: tuple, maker) -> pygame.Surface:
+        if key not in self.cache:
+            self.cache[key] = maker()
+        return self.cache[key]

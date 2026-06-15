@@ -20,7 +20,12 @@ ZONE_COST = {
     "residential": 25,
     "commercial": 35,
     "industrial": 30,
+    "park": 150,
 }
+
+PARK_MAINTENANCE = 3
+PARK_LAND_VALUE_BONUS = 0.07
+PARK_DEMAND_BONUS = 0.5
 ZONE_LEVEL_COST_MULTIPLIERS = {
     1: 1.0,
     2: 3.0,
@@ -89,8 +94,8 @@ WATER_CAPACITY_BY_BUILDING = {
     "large_water_tower": 520,
 }
 SERVICE_RADIUS = 6
-FIRE_RADIUS = 6
-POLICE_RADIUS = 6
+FIRE_RADIUS = 12
+POLICE_RADIUS = 12
 TRAIN_STATION_RADIUS = 8
 AIRPORT_RADIUS = 10
 
@@ -156,10 +161,10 @@ PEDESTRIAN_SPEED = 0.5
 SAVE_FILE = "savegame.json"
 
 COLORS = {
-    "background": (28, 34, 39),
-    "sidebar": (38, 43, 49),
-    "sidebar_panel": (48, 54, 61),
-    "sidebar_panel_active": (63, 76, 86),
+    "background": (16, 20, 26),
+    "sidebar": (18, 22, 28),
+    "sidebar_panel": (26, 32, 40),
+    "sidebar_panel_active": (42, 62, 88),
     "text": (235, 239, 242),
     "muted_text": (165, 176, 184),
     "money_good": (118, 213, 140),
@@ -183,6 +188,7 @@ COLORS = {
     "school": (137, 104, 196),
     "train_station": (200, 150, 100),
     "airport": (100, 150, 200),
+    "park": (58, 190, 100),
     "pedestrian": (255, 200, 100),
     "service": (122, 201, 148),
     "zone_border": (31, 41, 36),

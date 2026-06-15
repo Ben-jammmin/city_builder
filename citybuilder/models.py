@@ -18,6 +18,7 @@ class ZoneType(Enum):
     RESIDENTIAL = "residential"
     COMMERCIAL = "commercial"
     INDUSTRIAL = "industrial"
+    PARK = "park"
 
 
 class TerrainType(Enum):
@@ -59,6 +60,7 @@ class Tool(Enum):
     SCHOOL = "school"
     TRAIN_STATION = "train_station"
     AIRPORT = "airport"
+    PARK = "park"
     BULLDOZE = "bulldoze"
 
 
@@ -76,6 +78,7 @@ ZONE_LABELS = {
     ZoneType.RESIDENTIAL: "Residential",
     ZoneType.COMMERCIAL: "Commercial",
     ZoneType.INDUSTRIAL: "Industrial",
+    ZoneType.PARK: "Park",
 }
 
 TERRAIN_LABELS = {
@@ -136,6 +139,7 @@ TOOL_LABELS = {
     Tool.SCHOOL: "School",
     Tool.TRAIN_STATION: "Train Station",
     Tool.AIRPORT: "Airport",
+    Tool.PARK: "Park",
     Tool.BULLDOZE: "Bulldoze",
 }
 
@@ -155,6 +159,7 @@ TOOL_HOTKEYS = {
     "h": Tool.SCHOOL,
     "t": Tool.TRAIN_STATION,
     "a": Tool.AIRPORT,
+    "k": Tool.PARK,
 }
 
 MENU_TOOLS = {
@@ -165,6 +170,7 @@ MENU_TOOLS = {
         Tool.COMMERCIAL,
         Tool.DENSE_COMMERCIAL,
         Tool.INDUSTRIAL,
+        Tool.PARK,
         Tool.BULLDOZE,
     ],
     "Utilities": [
@@ -209,6 +215,7 @@ TOOL_TO_ZONE = {
     Tool.COMMERCIAL: (ZoneType.COMMERCIAL, 1),
     Tool.DENSE_COMMERCIAL: (ZoneType.COMMERCIAL, 2),
     Tool.INDUSTRIAL: (ZoneType.INDUSTRIAL, 1),
+    Tool.PARK: (ZoneType.PARK, 1),
 }
 
 POWER_SOURCE_BUILDINGS = {

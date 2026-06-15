@@ -69,6 +69,9 @@ from .settings import (
     ZONE_MAINTENANCE,
     ZONE_LEVEL_CAPACITY_MULTIPLIERS,
     ZONE_LEVEL_GROWTH_MULTIPLIERS,
+    PARK_DEMAND_BONUS,
+    PARK_LAND_VALUE_BONUS,
+    PARK_MAINTENANCE,
 )
 from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS
 
@@ -118,6 +121,7 @@ class Simulation:
                 self.city_map.building_count(BuildingType(building_name)) * cost
                 for building_name, cost in BUILDING_MAINTENANCE.items()
             )
+            + self.city_map.park_count() * PARK_MAINTENANCE
         )
         self.stats.last_revenue = revenue
         self.stats.last_expenses = expenses
@@ -128,6 +132,13 @@ class Simulation:
     def _update_all_tiles(self) -> None:
         for x, y, tile in self.city_map.iter_tiles():
             if tile.zone == ZoneType.EMPTY:
+                tile.residents = 0
+                tile.jobs = 0
+                tile.fire_risk = 0
+                tile.crime_risk = 0
+                continue
+
+            if tile.zone == ZoneType.PARK:
                 tile.residents = 0
                 tile.jobs = 0
                 tile.fire_risk = 0
@@ -174,6 +185,8 @@ class Simulation:
                 value += COMMERCIAL_NEIGHBOR_BONUS
             elif neighbor.zone == ZoneType.INDUSTRIAL:
                 value -= INDUSTRIAL_NEIGHBOR_PENALTY
+            elif neighbor.zone == ZoneType.PARK:
+                value += PARK_LAND_VALUE_BONUS
             elif neighbor.has_road:
                 value += ROAD_NEIGHBOR_BONUS
         return max(LAND_VALUE_MIN, min(LAND_VALUE_MAX, value))
@@ -278,13 +291,13 @@ class Simulation:
         self.stats.unpowered_zones = sum(
             1
             for _, _, tile in self.city_map.iter_tiles()
-            if tile.zone != ZoneType.EMPTY and not tile.powered
+            if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK) and not tile.powered
         )
         self.stats.watered_tiles = sum(1 for _, _, tile in self.city_map.iter_tiles() if tile.watered)
         self.stats.unwatered_zones = sum(
             1
             for _, _, tile in self.city_map.iter_tiles()
-            if tile.zone != ZoneType.EMPTY and not tile.watered
+            if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK) and not tile.watered
         )
 
     def _connected_network(self, source_buildings: set[BuildingType], line_attr: str) -> set[tuple[int, int]]:
@@ -360,11 +373,13 @@ class Simulation:
         airport_boost = self.city_map.building_count(BuildingType.AIRPORT) * AIRPORT_DEMAND_BOOST
         transport_bonus = train_boost + airport_boost
 
+        park_bonus = self.city_map.park_count() * PARK_DEMAND_BONUS
+
         self.stats.demand_residential = self._clamp_percent(
-            45 + jobs * 0.45 - population * 0.18 + service_bonus + utility_bonus - tax_penalty + transport_bonus * 0.3
+            45 + jobs * 0.45 - population * 0.18 + service_bonus + utility_bonus - tax_penalty + transport_bonus * 0.3 + park_bonus * 0.4
         )
         self.stats.demand_commercial = self._clamp_percent(
-            40 + population * 0.22 - jobs * 0.10 + service_bonus - self.stats.tax_rate * TAX_PENALTY_COMMERCIAL + transport_bonus
+            40 + population * 0.22 - jobs * 0.10 + service_bonus - self.stats.tax_rate * TAX_PENALTY_COMMERCIAL + transport_bonus + park_bonus * 0.2
         )
         self.stats.demand_industrial = self._clamp_percent(
             38 + population * 0.18 - jobs * 0.08 + utility_bonus - self.stats.tax_rate * TAX_PENALTY_INDUSTRIAL + transport_bonus * 0.7
@@ -385,7 +400,7 @@ class Simulation:
         police_covered_zones = 0
         total_crime_risk = 0
         for _, _, tile in self.city_map.iter_tiles():
-            if tile.zone == ZoneType.EMPTY:
+            if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
                 continue
             zoned_tiles += 1
             service_points += int(tile.police_coverage) + int(tile.fire_coverage) + int(tile.education_coverage)

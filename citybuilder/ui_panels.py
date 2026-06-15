@@ -22,6 +22,28 @@ PANEL_GAP = 6
 PANEL_PAD = 10
 BUTTON_GAP = 6
 
+def _build_swatch_map() -> dict:
+    return {
+        Tool.RESIDENTIAL:       COLORS["residential"],
+        Tool.DENSE_RESIDENTIAL: COLORS["residential"],
+        Tool.COMMERCIAL:        COLORS["commercial"],
+        Tool.DENSE_COMMERCIAL:  COLORS["commercial"],
+        Tool.INDUSTRIAL:        COLORS["industrial"],
+        Tool.PARK:              COLORS["park"],
+        Tool.ROAD:              COLORS["road"],
+        Tool.POWER_LINE:        COLORS["power"],
+        Tool.WATER_PIPE:        COLORS["water"],
+        Tool.POLICE:            COLORS["police"],
+        Tool.FIRE:              COLORS["fire"],
+        Tool.SCHOOL:            COLORS["school"],
+        Tool.POWER_PLANT:       COLORS["power"],
+        Tool.LARGE_POWER_PLANT: COLORS["power"],
+        Tool.WATER_TOWER:       COLORS["water"],
+        Tool.LARGE_WATER_TOWER: COLORS["water"],
+        Tool.TRAIN_STATION:     COLORS["train_station"],
+        Tool.AIRPORT:           COLORS["airport"],
+    }
+
 
 def fit_label(label: str, font: pygame.font.Font, max_width: int) -> str:
     if max_width <= 0:
@@ -40,12 +62,16 @@ def fit_label(label: str, font: pygame.font.Font, max_width: int) -> str:
 class SidebarPanelRenderer:
     def __init__(self, sidebar) -> None:
         self.sidebar = sidebar
+        self._swatch_map = _build_swatch_map()
 
     def draw_header(self, surface: pygame.Surface, x: int, y: int, view_mode: ViewMode) -> int:
-        self._draw_text(surface, "City Builder", x, y, self.sidebar.font_large)
+        # Accent line across the top
+        bar_rect = pygame.Rect(x, y, self.sidebar.rect.width - 28, 2)
+        pygame.draw.rect(surface, (55, 80, 110), bar_rect)
+        self._draw_text(surface, "City Builder", x, y + 6, self.sidebar.font_large)
         view_text = self.sidebar.font_small.render(f"{VIEW_LABELS[view_mode]} view", True, COLORS["muted_text"])
-        surface.blit(view_text, (self.sidebar.rect.right - 14 - view_text.get_width(), y + 5))
-        return y + 28
+        surface.blit(view_text, (self.sidebar.rect.right - 14 - view_text.get_width(), y + 10))
+        return y + 34
 
     def draw_city_stats(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
         panel = self._panel(surface, x, y, width, 76)
@@ -176,7 +202,8 @@ class SidebarPanelRenderer:
             self.sidebar.tool_buttons.append((rect, tool))
             hotkey = hotkeys_by_tool.get(tool, "")
             label = f"{hotkey} {TOOL_LABELS[tool]}".strip()
-            self._button(surface, rect, label, active=tool == active_tool, align_left=True)
+            swatch = self._swatch_map.get(tool)
+            self._button(surface, rect, label, active=tool == active_tool, align_left=True, swatch_color=swatch)
         return panel.bottom
 
     def draw_hover_panel(self, surface: pygame.Surface, city_map: CityMap, hover_tile, x: int, y: int, width: int) -> int:
@@ -264,6 +291,12 @@ class SidebarPanelRenderer:
     def _panel(self, surface: pygame.Surface, x: int, y: int, width: int, height: int) -> pygame.Rect:
         rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, COLORS["sidebar_panel"], rect, border_radius=6)
+        # Subtle top-edge highlight
+        pygame.draw.line(surface, (38, 48, 60), (rect.x + 6, rect.y + 1), (rect.right - 6, rect.y + 1))
+        # Inner panel separator under the title area
+        sep_y = rect.y + 24
+        pygame.draw.line(surface, (20, 26, 34), (rect.x + 6, sep_y), (rect.right - 6, sep_y))
+        pygame.draw.line(surface, (36, 44, 56), (rect.x + 6, sep_y + 1), (rect.right - 6, sep_y + 1))
         return rect
 
     def _bar(
@@ -295,17 +328,47 @@ class SidebarPanelRenderer:
         active: bool = False,
         disabled: bool = False,
         align_left: bool = False,
+        swatch_color: tuple | None = None,
     ) -> None:
         color = COLORS["sidebar_panel_active"] if active else COLORS["sidebar_panel"]
         if disabled:
-            color = (44, 48, 53)
+            color = (36, 40, 46)
         pygame.draw.rect(surface, color, rect, border_radius=5)
-        pygame.draw.rect(surface, (78, 88, 96), rect, width=1, border_radius=5)
+        # Bevel highlight (top/left edge lighter, bottom/right darker)
+        if not disabled:
+            hi = (min(255, color[0] + 18), min(255, color[1] + 18), min(255, color[2] + 22))
+            sh = (max(0, color[0] - 14), max(0, color[1] - 14), max(0, color[2] - 14))
+            if active:
+                hi, sh = sh, hi  # pressed: invert bevel
+            pygame.draw.line(surface, hi, (rect.x + 5, rect.y + 1), (rect.right - 6, rect.y + 1))
+            pygame.draw.line(surface, hi, (rect.x + 1, rect.y + 5), (rect.x + 1, rect.bottom - 6))
+            pygame.draw.line(surface, sh, (rect.x + 5, rect.bottom - 1), (rect.right - 6, rect.bottom - 1))
+            pygame.draw.line(surface, sh, (rect.right - 1, rect.y + 5), (rect.right - 1, rect.bottom - 6))
+        # Border
+        border_color = (80, 100, 120) if active else (55, 66, 78)
+        pygame.draw.rect(surface, border_color, rect, width=1, border_radius=5)
+        # Active left accent bar
+        if active:
+            bar = pygame.Rect(rect.x + 2, rect.y + 4, 3, rect.height - 8)
+            pygame.draw.rect(surface, (95, 155, 220), bar, border_radius=2)
         text_color = COLORS["muted_text"] if disabled else COLORS["text"]
-        fitted_label = fit_label(label, self.sidebar.font_small, max(0, rect.width - 12))
+        swatch_w = 0
+        if swatch_color and align_left and not disabled and rect.width >= 38:
+            swatch_w = 7
+            sx = rect.x + (13 if active else 10)
+            sy = rect.centery - 4
+            sc = swatch_color
+            diam = [(sx + 4, sy), (sx + swatch_w, sy + 4), (sx + 4, sy + 8), (sx, sy + 4)]
+            pygame.draw.polygon(surface, sc, diam)
+            pygame.draw.polygon(surface, (max(0, sc[0] - 40), max(0, sc[1] - 40), max(0, sc[2] - 40)), diam, 1)
+        text_budget = rect.width - 12 if swatch_w == 0 else rect.width - 12 - swatch_w - 8
+        fitted_label = fit_label(label, self.sidebar.font_small, max(0, text_budget))
         text = self.sidebar.font_small.render(fitted_label, True, text_color)
         if align_left:
-            text_pos = (rect.x + 8, rect.centery - text.get_height() // 2)
+            text_x = rect.x + 10 + (swatch_w + 8 if swatch_w > 0 else 0)
+            if active:
+                text_x += 3
+            text_pos = (text_x, rect.centery - text.get_height() // 2)
         else:
             text_pos = (rect.centerx - text.get_width() // 2, rect.centery - text.get_height() // 2)
         surface.blit(text, text_pos)

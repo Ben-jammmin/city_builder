@@ -211,6 +211,9 @@ class CityMap:
     def water_pipe_count(self) -> int:
         return sum(1 for _, _, tile in self.iter_tiles() if tile.has_water_pipe)
 
+    def park_count(self) -> int:
+        return sum(1 for _, _, tile in self.iter_tiles() if tile.zone == ZoneType.PARK)
+
     def building_count(self, building: BuildingType | None = None) -> int:
         if building is None:
             return sum(1 for _, _, tile in self.iter_tiles() if tile.building != BuildingType.NONE)
