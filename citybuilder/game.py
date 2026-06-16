@@ -865,6 +865,8 @@ class Game:
             if tile.on_fire:
                 self.simulation._fires[(x, y)] = tile.fire_burn_time
         self.pedestrian_system.clear()
+        self._undo_stack.clear()
+        self._current_undo_group = []
         # Recalculate camera pixel extents for the newly loaded map size.
         hw = self.camera.tile_w // 2
         self.camera.map_width  = self.map.width
