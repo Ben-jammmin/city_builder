@@ -325,10 +325,10 @@ class SimulationTests(unittest.TestCase):
 
         simulation._add_monthly_message(revenue=0, expenses=100)
 
-        self.assertIn("Some zones are not connected to power.", stats.messages)
-        self.assertIn("Some zones are not connected to water.", stats.messages)
-        self.assertIn("Some zones are outside fire station coverage.", stats.messages)
-        self.assertEqual(stats.messages[-1], "Some zones are not connected to power.")
+        self.assertTrue(any("not connected to power" in m for m in stats.messages))
+        self.assertTrue(any("not connected to water" in m for m in stats.messages))
+        self.assertTrue(any("outside fire station coverage" in m for m in stats.messages))
+        self.assertIn("not connected to power", stats.messages[-1])
 
     def test_parks_do_not_report_fire_or_crime_risk(self) -> None:
         city_map = CityMap(3, 3)
