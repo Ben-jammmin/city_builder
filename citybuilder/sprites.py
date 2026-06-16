@@ -36,15 +36,26 @@ def tile_variant(x: int, y: int) -> int:
     return (x * 37 + y * 17) & 3
 
 
+def _draw_ground_shadow(surface: pygame.Surface, cx: int, cy: int, tw: int, th: int) -> None:
+    """Draw a soft elliptical shadow on the ground plane under a building."""
+    if tw < 14:
+        return
+    sw = max(8, tw * 5 // 8)
+    sh = max(3, th // 3)
+    ss = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    pygame.draw.ellipse(ss, (0, 0, 0, 60), ss.get_rect())
+    surface.blit(ss, (cx - sw // 2, cy + th // 2 - sh // 2))
+
+
 # ---------------------------------------------------------------------------
 # Colour palettes
 # ---------------------------------------------------------------------------
 
 _GRASS = [
-    (82, 115, 60),
-    (74, 105, 54),
-    (90, 124, 66),
-    (70, 100, 52),
+    (92, 136, 62),
+    (80, 120, 52),
+    (102, 148, 70),
+    (74, 112, 50),
 ]
 
 _ZONE_WALL = {
@@ -179,6 +190,12 @@ class SpriteAtlas:
         same_neighbors: dict | None = None,
     ) -> None:
         v = tile_variant(x, y)
+        # Try PNG asset first (grass and water only; forest/hill stay procedural)
+        if self.assets is not None and terrain in (TerrainType.GRASS, TerrainType.WATER):
+            asset = self._asset(f"terrain/{terrain.value}", tw)
+            if asset is not None:
+                surface.blit(asset, (cx - tw // 2, cy))
+                return
         ek = self._edge_key(same_neighbors) if terrain == TerrainType.WATER else None
         key = ("T", terrain, tw, v, ek)
         spr = self._get(key, lambda: self._terrain_spr(terrain, tw, th, v, same_neighbors))
@@ -215,6 +232,7 @@ class SpriteAtlas:
     ) -> None:
         if development < 0.06 or (zone not in _BLD_FRACS and zone != ZoneType.PARK):
             return
+        _draw_ground_shadow(surface, cx, cy, tw, th)
         stage   = max(1, min(4, int(development * 4) + 1))
         v       = variant & 3
         # Image assets only apply to standard zones, not recreation subtypes
@@ -245,6 +263,7 @@ class SpriteAtlas:
         building: BuildingType,
         rotation: int = 0,
     ) -> None:
+        _draw_ground_shadow(surface, cx, cy, tw, th)
         asset = self._asset(f"civic/{building.value}", tw)
         if asset is not None:
             if rotation in (1, 3):
@@ -270,10 +289,44 @@ class SpriteAtlas:
         th: int,
         connections: dict[str, bool],
     ) -> None:
+        if self.assets is not None:
+            road_name = self._road_asset_name(connections)
+            if road_name:
+                asset = self._asset(road_name, tw)
+                if asset is not None:
+                    surface.blit(asset, (cx - tw // 2, cy))
+                    return
         key = ("R", tw, connections["north"], connections["east"],
                connections["south"], connections["west"])
         spr = self._get(key, lambda: self._road_spr(tw, th, connections))
         surface.blit(spr, (cx - tw // 2, cy))
+
+    def _road_asset_name(self, connections: dict[str, bool]) -> str | None:
+        n = connections.get("north", False)
+        e = connections.get("east", False)
+        s = connections.get("south", False)
+        w = connections.get("west", False)
+        count = sum([n, e, s, w])
+        if count == 4:
+            return "roads/xing"
+        if count == 2:
+            if n and s: return "roads/straight_SW"
+            if e and w: return "roads/straight_SE"
+            if n and e: return "roads/corner_W"
+            if e and s: return "roads/corner_N"
+            if s and w: return "roads/corner_E"
+            if n and w: return "roads/corner_S"
+        if count == 3:
+            if not n: return "roads/intersect_NE"
+            if not w: return "roads/intersect_NW"
+            if not e: return "roads/intersect_SE"
+            if not s: return "roads/intersect_SW"
+        if count == 1:
+            if n: return "roads/deadend_SW"
+            if e: return "roads/deadend_NW"
+            if s: return "roads/deadend_NE"
+            if w: return "roads/deadend_SE"
+        return None
 
     def draw_pedestrian(
         self,
@@ -448,19 +501,19 @@ class SpriteAtlas:
         variant: int,
     ) -> None:
         base = _GRASS[variant]
-        light = _s(base, 14)
-        shadow = _s(base, -20)
+        light = _s(base, 30)
+        shadow = _s(base, -40)
 
         # Fill full diamond
         pygame.draw.polygon(spr, base, d)
 
-        # Light NE half (north vertex → east vertex)
-        ne_face = [(hw, 0), (tw, hh), (hw, hh), (hw, 0)]
-        pygame.draw.polygon(spr, light, ne_face)
+        # Light NW half (north vertex → west vertex) — sun from upper-left
+        nw_face = [(hw, 0), (0, hh), (hw, hh), (hw, 0)]
+        pygame.draw.polygon(spr, light, nw_face)
 
-        # Shadow SW half (south vertex → west vertex)
-        sw_face = [(hw, th), (0, hh), (hw, hh), (hw, th)]
-        pygame.draw.polygon(spr, shadow, sw_face)
+        # Shadow SE half (south vertex → east vertex)
+        se_face = [(hw, th), (tw, hh), (hw, hh), (hw, th)]
+        pygame.draw.polygon(spr, shadow, se_face)
 
         # Blend back to base at center with small mid-diamond
         mid_shrink = max(1, tw // 12)
@@ -470,10 +523,10 @@ class SpriteAtlas:
         # Grass detail marks
         if tw >= 16:
             detail_cols = [
-                (_s(base, 20), _s(base, -10)),
-                (_s(base, 15), _s(base, -8)),
-                (_s(base, 25), _s(base, -12)),
-                (_s(base, 18), _s(base, -6)),
+                (_s(base, 22), _s(base, -12)),
+                (_s(base, 18), _s(base, -10)),
+                (_s(base, 28), _s(base, -14)),
+                (_s(base, 20), _s(base, -8)),
             ][variant]
             positions = [
                 (tw * 2 // 7, th * 3 // 8),
@@ -485,6 +538,9 @@ class SpriteAtlas:
             for i, (px, py) in enumerate(positions):
                 c = detail_cols[0] if i % 2 == 0 else detail_cols[1]
                 pygame.draw.line(spr, c, (px, py + 2), (px + lw, py), lw)
+
+        # Tile edge outline — defines isometric grid boundaries
+        pygame.draw.polygon(spr, _s(base, -45), d, 1)
 
     def _draw_water(
         self,
@@ -539,6 +595,9 @@ class SpriteAtlas:
                 if not sn.get(direction, True):
                     pygame.draw.line(spr, shore, p1, p2, lw)
 
+        # Tile edge outline
+        pygame.draw.polygon(spr, (22, 55, 88), d, 1)
+
     def _draw_forest(
         self,
         spr: pygame.Surface,
@@ -549,20 +608,23 @@ class SpriteAtlas:
         d: list,
         variant: int,
     ) -> None:
-        floor_c = (44, 80, 46)
-        floor_s = (36, 64, 38)
+        floor_c = (48, 86, 50)
+        floor_s = (32, 60, 34)
         pygame.draw.polygon(spr, floor_s, d)
-        # Lighter NW floor
+        # Lighter NW floor, darker SE
         pygame.draw.polygon(spr, floor_c, [(hw, 0), (0, hh), (hw, hh)])
-        pygame.draw.polygon(spr, floor_c, [(hw, 0), (tw, hh), (hw, hh)])
+        pygame.draw.polygon(spr, _s(floor_c, 10), [(hw, 0), (tw, hh), (hw, hh)])
+
+        # Tile edge outline
+        pygame.draw.polygon(spr, (22, 45, 24), d, 1)
 
         if tw < 12:
             return
 
-        tc = [(32, 88, 44), (38, 100, 50), (28, 78, 40)]
-        hi = [(56, 128, 68), (62, 138, 76), (50, 118, 62)]
-        shadow_c = (24, 60, 30)
-        trunk = (68, 58, 38)
+        tc = [(36, 96, 48), (44, 110, 56), (30, 84, 42)]
+        hi = [(62, 140, 74), (70, 152, 84), (54, 126, 66)]
+        shadow_c = (20, 52, 26)
+        trunk = (72, 60, 36)
         r_base = max(4, tw // 8)
 
         tree_positions = [
@@ -596,17 +658,20 @@ class SpriteAtlas:
         d: list,
         variant: int,
     ) -> None:
-        base = (104, 104, 90)
-        lit  = (124, 124, 108)
-        dark = (80, 80, 70)
-        rock = (140, 136, 120)
+        base = (110, 110, 95)
+        lit  = (138, 138, 120)
+        dark = (70, 70, 60)
+        rock = (150, 146, 128)
 
         pygame.draw.polygon(spr, base, d)
 
-        # NW face lighter
+        # NW face lighter (sun from upper-left)
         pygame.draw.polygon(spr, lit, [(hw, 0), (0, hh), (hw, hh)])
         # SE face darker
         pygame.draw.polygon(spr, dark, [(hw, th), (tw, hh), (hw, hh)])
+
+        # Tile edge outline
+        pygame.draw.polygon(spr, (52, 52, 44), d, 1)
 
         if tw < 14:
             return
@@ -634,18 +699,19 @@ class SpriteAtlas:
         zone_c = COLORS.get(color_key, (100, 100, 100))
         blend = tuple(int(grass[i] * 0.5 + zone_c[i] * 0.5) for i in range(3))
 
-        # Directional shading like grass tile
-        pygame.draw.polygon(spr, blend, d)
-        light = _s(blend, 12)
-        shadow = _s(blend, -18)
-        pygame.draw.polygon(spr, light, [(hw, 0), (tw, hh), (hw, hh)])
-        pygame.draw.polygon(spr, shadow, [(hw, th), (0, hh), (hw, hh)])
+        # Semi-transparent fill so the grass PNG tile shows through underneath
+        FILL_ALPHA = 85
+        pygame.draw.polygon(spr, (*blend, FILL_ALPHA), d)
+        light = _s(blend, 24)
+        shadow = _s(blend, -30)
+        pygame.draw.polygon(spr, (*light, FILL_ALPHA), [(hw, 0), (0, hh), (hw, hh)])
+        pygame.draw.polygon(spr, (*shadow, FILL_ALPHA), [(hw, th), (tw, hh), (hw, hh)])
         mid = _diam_pts(tw - max(2, tw // 10), th - max(1, th // 8), max(1, th // 16))
-        pygame.draw.polygon(spr, blend, mid)
+        pygame.draw.polygon(spr, (*blend, FILL_ALPHA), mid)
 
-        # Zone indicator border
-        bw = max(1, tw // 24)
-        pygame.draw.polygon(spr, _s(zone_c, -30), d, bw)
+        # Zone indicator border (opaque so zone type stays visible)
+        bw = max(1, tw // 20)
+        pygame.draw.polygon(spr, _s(zone_c, -20), d, bw)
 
         # Dense: extra inner ring
         if level > 1 and tw >= 16:

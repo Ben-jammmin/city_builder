@@ -403,6 +403,8 @@ class CityStats:
     police_coverage_percent: int = 0
     police_uncovered_zones: int = 0
     average_crime_risk: int = 0
+    education_coverage_percent: int = 0
+    health_coverage_percent: int = 0
     milestone_pop: int = 0
     rev_residential: int = 0
     rev_commercial: int = 0

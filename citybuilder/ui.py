@@ -12,6 +12,7 @@ from .settings import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
+from .settings import SIM_SPEED_PRESETS
 from .ui_panels import PANEL_GAP, SidebarPanelRenderer, fit_label
 
 SCROLL_STEP = 38
@@ -30,6 +31,8 @@ class Sidebar:
 
         self.menu_buttons: list[tuple[pygame.Rect, str]] = []
         self.tool_buttons: list[tuple[pygame.Rect, Tool]] = []
+        self.speed_rects: list[tuple[pygame.Rect, int]] = []
+        self.speed_index: int = 1
         self.minimize_rect = pygame.Rect(0, 0, 0, 0)
         self.tax_down_rect = pygame.Rect(0, 0, 0, 0)
         self.tax_up_rect = pygame.Rect(0, 0, 0, 0)
@@ -110,6 +113,9 @@ class Sidebar:
         for rect, tool in self.tool_buttons:
             if rect.collidepoint(pos):
                 return ("tool", tool)
+        for rect, idx in self.speed_rects:
+            if rect.collidepoint(pos):
+                return ("speed", idx)
         if self.tax_down_rect.collidepoint(pos):
             return ("tax", -1)
         if self.tax_up_rect.collidepoint(pos):
@@ -159,8 +165,9 @@ class Sidebar:
         status_x = center_x + center_w + BAR_GAP
         info_x = status_x + status_w + BAR_GAP
 
+        speed_labels = [label for label, _ in SIM_SPEED_PRESETS]
         city_bottom = self.panels.draw_city_stats(surface, stats, left_x, content_y, left_w)
-        self.panels.draw_controls(surface, stats, left_x, city_bottom + PANEL_GAP, left_w, fullscreen)
+        self.panels.draw_controls(surface, stats, left_x, city_bottom + PANEL_GAP, left_w, fullscreen, self.speed_index, speed_labels)
 
         tab_bottom = self.panels.draw_menu_tabs(surface, center_x, content_y, center_w, active_menu)
         self.panels.draw_tool_buttons(surface, center_x, tab_bottom + 2, center_w, active_tool, active_menu)
@@ -235,6 +242,7 @@ class Sidebar:
     def _reset_click_targets(self) -> None:
         self.menu_buttons.clear()
         self.tool_buttons.clear()
+        self.speed_rects.clear()
         self.minimize_rect = pygame.Rect(0, 0, 0, 0)
         self.tax_down_rect = pygame.Rect(0, 0, 0, 0)
         self.tax_up_rect = pygame.Rect(0, 0, 0, 0)

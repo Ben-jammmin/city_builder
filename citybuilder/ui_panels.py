@@ -14,7 +14,7 @@ from .models import (
     Tool,
     ZoneType,
 )
-from .settings import COLORS, MAX_TAX_RATE, MIN_TAX_RATE, ROAD_TRAFFIC_CAPACITY
+from .settings import COLORS, HIGH_RISK_THRESHOLD, MAX_TAX_RATE, MIN_TAX_RATE, ROAD_TRAFFIC_CAPACITY
 
 PANEL_GAP = 6
 PANEL_PAD = 10
@@ -141,8 +141,8 @@ class SidebarPanelRenderer:
             self._button(surface, rect, label, active=menu_name == active_menu)
         return y + 32
 
-    def draw_controls(self, surface: pygame.Surface, stats, x: int, y: int, width: int, fullscreen: bool) -> int:
-        panel = self._panel(surface, x, y, width, 68)
+    def draw_controls(self, surface: pygame.Surface, stats, x: int, y: int, width: int, fullscreen: bool, speed_index: int, speed_labels: list) -> int:
+        panel = self._panel(surface, x, y, width, 96)
         self._draw_text(surface, "Controls", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
 
         self._draw_text(surface, "Tax", panel.x + PANEL_PAD, panel.y + 39, self.sidebar.font_small, COLORS["muted_text"])
@@ -161,6 +161,16 @@ class SidebarPanelRenderer:
         self._button(surface, self.sidebar.fullscreen_rect, "Window" if fullscreen else "Full")
         self._button(surface, self.sidebar.save_rect, "Save")
         self._button(surface, self.sidebar.load_rect, "Load")
+
+        self._draw_text(surface, "Speed", panel.x + PANEL_PAD, panel.y + 71, self.sidebar.font_small, COLORS["muted_text"])
+        n = len(speed_labels)
+        btn_area_x = panel.x + PANEL_PAD + 46
+        btn_area_w = width - PANEL_PAD * 2 - 46
+        btn_w = (btn_area_w - BUTTON_GAP * (n - 1)) // n
+        for i, label in enumerate(speed_labels):
+            rect = pygame.Rect(btn_area_x + i * (btn_w + BUTTON_GAP), panel.y + 66, btn_w, 24)
+            self.sidebar.speed_rects.append((rect, i))
+            self._button(surface, rect, label, active=(i == speed_index))
         return panel.bottom
 
     def draw_demand_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
@@ -172,7 +182,7 @@ class SidebarPanelRenderer:
         return panel.bottom
 
     def draw_system_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
-        panel = self._panel(surface, x, y, width, 136)
+        panel = self._panel(surface, x, y, width, 154)
         self._draw_text(surface, "Systems", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         self._draw_text(
             surface,
@@ -190,7 +200,7 @@ class SidebarPanelRenderer:
             self.sidebar.font_mono,
             self._utility_color(stats.water_capacity, stats.water_usage, stats.unwatered_zones),
         )
-        fire_color = COLORS["money_good"] if stats.fire_uncovered_zones == 0 and stats.average_fire_risk < 70 else COLORS["money_bad"]
+        fire_color = COLORS["money_good"] if stats.fire_uncovered_zones == 0 and stats.average_fire_risk < HIGH_RISK_THRESHOLD else COLORS["money_bad"]
         self._draw_text(
             surface,
             f"Fire {stats.fire_coverage_percent}%  Risk {stats.average_fire_risk}%",
@@ -199,7 +209,7 @@ class SidebarPanelRenderer:
             self.sidebar.font_mono,
             fire_color,
         )
-        police_color = COLORS["money_good"] if stats.police_uncovered_zones == 0 and stats.average_crime_risk < 70 else COLORS["money_bad"]
+        police_color = COLORS["money_good"] if stats.police_uncovered_zones == 0 and stats.average_crime_risk < HIGH_RISK_THRESHOLD else COLORS["money_bad"]
         self._draw_text(
             surface,
             f"Police {stats.police_coverage_percent}%  Crime {stats.average_crime_risk}%",
@@ -207,6 +217,19 @@ class SidebarPanelRenderer:
             panel.y + 84,
             self.sidebar.font_mono,
             police_color,
+        )
+        edu_health_color = (
+            COLORS["money_good"]
+            if stats.education_coverage_percent >= 80 and stats.health_coverage_percent >= 80
+            else COLORS["muted_text"]
+        )
+        self._draw_text(
+            surface,
+            f"School {stats.education_coverage_percent}%  Health {stats.health_coverage_percent}%",
+            panel.x + PANEL_PAD,
+            panel.y + 102,
+            self.sidebar.font_mono,
+            edu_health_color,
         )
         issue_text = "All zoned tiles connected"
         issue_color = COLORS["muted_text"]
@@ -218,8 +241,8 @@ class SidebarPanelRenderer:
                 f"No Po:{stats.police_uncovered_zones}"
             )
             issue_color = COLORS["money_bad"]
-        self._draw_text(surface, issue_text, panel.x + PANEL_PAD, panel.y + 104, self.sidebar.font_small, issue_color)
-        self._bar(surface, "Svc", stats.service_score, COLORS["service"], panel.x + PANEL_PAD, panel.y + 120, width - PANEL_PAD * 2)
+        self._draw_text(surface, issue_text, panel.x + PANEL_PAD, panel.y + 120, self.sidebar.font_small, issue_color)
+        self._bar(surface, "Svc", stats.service_score, COLORS["service"], panel.x + PANEL_PAD, panel.y + 138, width - PANEL_PAD * 2)
         return panel.bottom
 
     def draw_tool_buttons(

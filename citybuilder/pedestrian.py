@@ -68,7 +68,8 @@ class PedestrianSystem:
             ped.update(dt, map_width, map_height)
 
         if population > 0 and len(self.pedestrians) < self.max_count:
-            self.spawn_accumulator += population * spawn_rate * dt
+            self.spawn_accumulator = min(self.spawn_accumulator + population * spawn_rate * dt,
+                                         float(self.max_count))
             while self.spawn_accumulator >= 1.0 and len(self.pedestrians) < self.max_count:
                 self.spawn_accumulator -= 1.0
                 self._spawn_pedestrian(map_width, map_height)

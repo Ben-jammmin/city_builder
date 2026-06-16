@@ -18,11 +18,12 @@ import pygame
 from .camera import Camera
 from .city_map import CityMap
 from .models import (
-    POWER_SOURCE_BUILDINGS, TOOL_TO_BUILDING, WATER_SOURCE_BUILDINGS,
-    BuildingType, TerrainType, Tool, ViewMode, ZoneType,
+    POWER_SOURCE_BUILDINGS, TOOL_TO_BUILDING, TOOL_TO_RECREATION, TOOL_TO_ZONE,
+    WATER_SOURCE_BUILDINGS,
+    BuildingType, RecreationType, TerrainType, Tool, ViewMode, ZoneType,
 )
 from .pedestrian import PedestrianSystem
-from .settings import COLORS, DAY_CYCLE_SECONDS, TILE_SIZE
+from .settings import COLORS, DAY_CYCLE_SECONDS, HIGH_RISK_THRESHOLD, TILE_SIZE
 from .sprites import SpriteAtlas, tile_variant
 
 _MINIMAP_COLOR = {
@@ -76,6 +77,8 @@ class Renderer:
         self._mm_last_update: int = -9999
         self._night_overlay: pygame.Surface | None = None
         self._night_overlay_size: tuple[int, int] = (0, 0)
+        self._diam_overlay: pygame.Surface | None = None
+        self._diam_overlay_size: tuple[int, int] = (0, 0)
         self.minimap_rect: pygame.Rect | None = None
         self.day_night_enabled: bool = False
 
@@ -129,7 +132,7 @@ class Renderer:
             self._draw_tile(surface, city_map, tile, mx, my, cx, cy, tw, th, view_mode, rot, utility_network)
 
         # Draw hover highlight over the tile under the mouse cursor
-        if hover_tile and city_map.in_bounds(*hover_tile):
+        if hover_tile is not None and city_map.in_bounds(*hover_tile):
             hx, hy = hover_tile
             cx, cy = camera.world_to_screen(hx, hy)
             self._draw_hover(surface, city_map, active_tool, hover_tile, cx, cy, tw, th)
@@ -185,11 +188,11 @@ class Renderer:
     def _minimap_tile_color(self, tile) -> tuple:
         if tile.on_fire:
             return _MINIMAP_COLOR["fire"]
-        if tile.building.value != "none":
+        if tile.building != BuildingType.NONE:
             return _MINIMAP_COLOR["building"]
         if tile.has_road:
             return _MINIMAP_COLOR["road"]
-        if tile.zone.value != "empty":
+        if tile.zone != ZoneType.EMPTY:
             return _MINIMAP_COLOR.get(tile.zone.value, _MINIMAP_COLOR["building"])
         return _MINIMAP_COLOR.get(tile.terrain.value, _MINIMAP_COLOR["grass"])
 
@@ -383,50 +386,18 @@ class Renderer:
         rotation: int,
     ):
         """
-        Yield (x, y) tile indices in back-to-front draw order for the given rotation.
+        Yield (x, y) tile indices in back-to-front draw order.
 
-        In isometric view, tiles closer to the viewer must be drawn LAST so they
-        appear in front of distant tiles. The "depth" of a tile depends on the
-        camera angle (rotation), so we iterate diagonals in a different direction
-        for each rotation.
-
-        Diagonals at rotation r:
-          r=0 (NW view): depth = x+y → draw increasing x+y
-          r=1 (NE view): depth = x-y → draw increasing x-y
-          r=2 (SE view): depth = -(x+y) → draw decreasing x+y
-          r=3 (SW view): depth = y-x → draw increasing y-x
+        Coordinates are in rotated space. The isometric projection always places
+        a tile's screen Y at (rtx + rty) * hh, so depth = x + y in the rotated
+        coordinate space regardless of which rotation is active. We therefore
+        always iterate diagonal bands of (x + y = constant) in increasing order.
         """
-        if rotation == 0:
-            # Standard: draw diagonal bands of (x+y=constant) from back to front
-            for total in range(sx + sy, ex + ey - 1):
-                x_lo = max(sx, total - (ey - 1))
-                x_hi = min(ex - 1, total - sy)
-                for x in range(x_lo, x_hi + 1):
-                    yield x, total - x
-
-        elif rotation == 1:
-            # Diagonal bands of (x-y=constant) from smallest to largest
-            for total in range(sx - (ey - 1), ex - sy):
-                x_lo = max(sx, total + sy)
-                x_hi = min(ex - 1, total + ey - 1)
-                for x in range(x_lo, x_hi + 1):
-                    yield x, x - total
-
-        elif rotation == 2:
-            # Same bands as rotation=0 but drawn in reverse order
-            for total in range(ex + ey - 2, sx + sy - 1, -1):
-                x_lo = max(sx, total - (ey - 1))
-                x_hi = min(ex - 1, total - sy)
-                for x in range(x_lo, x_hi + 1):
-                    yield x, total - x
-
-        else:  # rotation == 3
-            # Diagonal bands of (y-x=constant) from smallest to largest
-            for total in range(sy - (ex - 1), ey - sx):
-                y_lo = max(sy, total + sx)
-                y_hi = min(ey - 1, total + ex - 1)
-                for y in range(y_lo, y_hi + 1):
-                    yield y - total, y
+        for total in range(sx + sy, ex + ey - 1):
+            x_lo = max(sx, total - (ey - 1))
+            x_hi = min(ex - 1, total - sy)
+            for x in range(x_lo, x_hi + 1):
+                yield x, total - x
 
     # ------------------------------------------------------------------ #
     # Drawing helpers                                                      #
@@ -441,9 +412,12 @@ class Renderer:
     ) -> None:
         """Draw a translucent diamond overlay on a tile (used for view mode tints)."""
         hw, hh = tw // 2, th // 2
-        ov = pygame.Surface((tw, th), pygame.SRCALPHA)
-        pygame.draw.polygon(ov, color, [(hw, 0), (tw, hh), (hw, th), (0, hh)])
-        surface.blit(ov, (cx - hw, cy))
+        if self._diam_overlay_size != (tw, th):
+            self._diam_overlay = pygame.Surface((tw, th), pygame.SRCALPHA)
+            self._diam_overlay_size = (tw, th)
+        self._diam_overlay.fill((0, 0, 0, 0))
+        pygame.draw.polygon(self._diam_overlay, color, [(hw, 0), (tw, hh), (hw, th), (0, hh)])
+        surface.blit(self._diam_overlay, (cx - hw, cy))
 
     def _draw_marker_dot(
         self,
@@ -502,10 +476,10 @@ class Renderer:
         if not tile.watered:
             self._draw_status_badge(surface, (center[0] + r, center[1] - r // 2),
                                     COLORS["water"], "water", tw)
-        if tile.fire_risk >= 70:
+        if tile.fire_risk >= HIGH_RISK_THRESHOLD:
             self._draw_status_badge(surface, (center[0] - r, center[1] + r // 2),
                                     COLORS["fire"], "fire", tw)
-        if tile.crime_risk >= 70:
+        if tile.crime_risk >= HIGH_RISK_THRESHOLD:
             self._draw_status_badge(surface, (center[0] + r, center[1] + r // 2),
                                     COLORS["police"], "crime", tw)
 
@@ -577,7 +551,7 @@ class Renderer:
 
     def _risk_color_iso(self, risk: int, covered: bool) -> tuple:
         """Return an RGBA overlay color for a fire/crime risk level."""
-        if risk >= 70:
+        if risk >= HIGH_RISK_THRESHOLD:
             return (142, 57, 53, 148)
         if risk >= 40:
             return (142, 111, 58, 128)
@@ -593,12 +567,14 @@ class Renderer:
             return True
         if active_tool in (Tool.RESIDENTIAL, Tool.COMMERCIAL, Tool.INDUSTRIAL,
                            Tool.DENSE_RESIDENTIAL, Tool.DENSE_COMMERCIAL):
+            zone, level = TOOL_TO_ZONE[active_tool]
             return (
                 tile.terrain != TerrainType.GRASS
                 or tile.has_road
                 or tile.has_power_line
                 or tile.has_water_pipe
                 or tile.building != BuildingType.NONE
+                or (tile.zone == zone and tile.zone_level == level)
             )
         if active_tool == Tool.PARK:
             return (
@@ -607,16 +583,18 @@ class Renderer:
                 or tile.has_power_line
                 or tile.has_water_pipe
                 or tile.building != BuildingType.NONE
-                or tile.zone == ZoneType.PARK
+                or (tile.zone == ZoneType.PARK and tile.recreation_type == RecreationType.PARK)
             )
         if active_tool in (Tool.PLAYGROUND, Tool.SPORTS_FIELD, Tool.STADIUM,
                            Tool.GOLF_COURSE, Tool.POOL, Tool.CINEMA, Tool.MUSEUM, Tool.ZOO):
+            rec_type = TOOL_TO_RECREATION.get(active_tool)
             return (
                 tile.terrain != TerrainType.GRASS
                 or tile.has_road
                 or tile.has_power_line
                 or tile.has_water_pipe
                 or tile.building != BuildingType.NONE
+                or (tile.zone == ZoneType.PARK and tile.recreation_type == rec_type)
             )
         if active_tool == Tool.ROAD:
             return tile.has_road or tile.zone != ZoneType.EMPTY or tile.building != BuildingType.NONE

@@ -38,6 +38,16 @@ def to_save_data(city_map: CityMap, stats: CityStats) -> dict[str, Any]:
 
 
 def from_save_data(data: dict[str, Any]) -> tuple[CityMap, CityStats]:
+    file_version = data.get("version", 0)
+    if file_version != SAVE_VERSION:
+        import warnings
+        warnings.warn(
+            f"Save file version {file_version} does not match current version {SAVE_VERSION}. "
+            "Some data may be missing or defaulted.",
+            UserWarning,
+            stacklevel=3,
+        )
+
     map_data = data["map"]
     city_map = CityMap(map_data["width"], map_data["height"])
     tiles = map_data["tiles"]
@@ -119,6 +129,8 @@ def stats_to_data(stats: CityStats) -> dict[str, Any]:
         "police_coverage_percent": stats.police_coverage_percent,
         "police_uncovered_zones": stats.police_uncovered_zones,
         "average_crime_risk": stats.average_crime_risk,
+        "education_coverage_percent": stats.education_coverage_percent,
+        "health_coverage_percent": stats.health_coverage_percent,
         "milestone_pop": stats.milestone_pop,
         "rev_residential": stats.rev_residential,
         "rev_commercial": stats.rev_commercial,
@@ -162,6 +174,8 @@ def stats_from_data(data: dict[str, Any]) -> CityStats:
         police_coverage_percent=data.get("police_coverage_percent", 0),
         police_uncovered_zones=data.get("police_uncovered_zones", 0),
         average_crime_risk=data.get("average_crime_risk", 0),
+        education_coverage_percent=data.get("education_coverage_percent", 0),
+        health_coverage_percent=data.get("health_coverage_percent", 0),
         milestone_pop=data.get("milestone_pop", 0),
         rev_residential=data.get("rev_residential", 0),
         rev_commercial=data.get("rev_commercial", 0),

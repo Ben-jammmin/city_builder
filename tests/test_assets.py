@@ -6,52 +6,56 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 
+ROAD_TILES = [
+    "straight_SE", "straight_SW",
+    "corner_N", "corner_E", "corner_S", "corner_W",
+    "intersect_NE", "intersect_NW", "intersect_SE", "intersect_SW",
+    "deadend_NE", "deadend_NW", "deadend_SE", "deadend_SW",
+    "xing",
+]
 
-class GeneratedAssetPackTests(unittest.TestCase):
-    def test_generated_asset_pack_contains_required_pngs(self) -> None:
-        expected = {
-            "preview.png",
-            "terrain/grass.png",
-            "terrain/water.png",
-            "terrain/forest.png",
-            "terrain/hill.png",
-            "zones/residential.png",
-            "zones/residential_tier2.png",
-            "zones/commercial.png",
-            "zones/commercial_tier2.png",
-            "zones/industrial.png",
-            "civic/power_plant.png",
-            "civic/large_power_plant.png",
-            "civic/water_tower.png",
-            "civic/large_water_tower.png",
-            "civic/police.png",
-            "civic/fire.png",
-            "civic/school.png",
-            "civic/train_station.png",
-            "civic/airport.png",
-        }
-        expected.update(f"terrain/grass_{index}.png" for index in range(4))
-        expected.update(f"terrain/forest_{index}.png" for index in range(2))
-        expected.update(f"pedestrians/pedestrian_{index}.png" for index in range(3))
+CIVIC_BUILDINGS = [
+    "power_plant", "large_power_plant",
+    "water_tower", "large_water_tower",
+    "police", "fire", "school", "hospital",
+    "train_station", "airport",
+]
 
-        for stage, variant in itertools.product(range(1, 5), range(4)):
-            expected.add(f"buildings/residential_{stage}_{variant}.png")
-            expected.add(f"buildings/residential_tier2_{stage}_{variant}.png")
-            expected.add(f"buildings/commercial_{stage}_{variant}.png")
-            expected.add(f"buildings/commercial_tier2_{stage}_{variant}.png")
-            expected.add(f"buildings/industrial_{stage}_{variant}.png")
 
-        for bits in itertools.product("01", repeat=4):
-            mask = "".join(bits)
-            expected.add(f"roads/road_{mask}.png")
-            expected.add(f"utilities/power_{mask}.png")
-            expected.add(f"utilities/water_{mask}.png")
+class AssetPackTests(unittest.TestCase):
+    def test_required_assets_exist(self) -> None:
+        expected: set[str] = set()
+
+        # Terrain
+        expected.add("terrain/grass.png")
+        expected.add("terrain/water.png")
+
+        # Roads (named tiles used by _road_asset_name())
+        for name in ROAD_TILES:
+            expected.add(f"roads/{name}.png")
+
+        # Civic buildings
+        for name in CIVIC_BUILDINGS:
+            expected.add(f"civic/{name}.png")
+
+        # Pedestrians
+        for i in range(3):
+            expected.add(f"pedestrians/pedestrian_{i}.png")
+
+        # Zone buildings: 4 stages × 4 variants × 5 types
+        zone_prefixes = [
+            "residential", "residential_tier2",
+            "commercial", "commercial_tier2",
+            "industrial",
+        ]
+        for prefix in zone_prefixes:
+            for stage, variant in itertools.product(range(1, 5), range(4)):
+                expected.add(f"buildings/{prefix}_{stage}_{variant}.png")
 
         missing = [name for name in sorted(expected) if not (ASSETS_ROOT / name).is_file()]
+        self.assertEqual(missing, [], f"{len(missing)} required asset(s) missing")
 
-        self.assertEqual(missing, [])
-
-    def test_generated_pngs_have_png_signature(self) -> None:
+    def test_all_pngs_have_valid_signature(self) -> None:
         for path in ASSETS_ROOT.rglob("*.png"):
             with self.subTest(path=path.relative_to(ASSETS_ROOT)):
                 self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")

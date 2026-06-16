@@ -76,9 +76,7 @@ from .settings import (
     ZONE_MAINTENANCE,
     ZONE_LEVEL_CAPACITY_MULTIPLIERS,
     ZONE_LEVEL_GROWTH_MULTIPLIERS,
-    PARK_DEMAND_BONUS,
     PARK_LAND_VALUE_BONUS,
-    PARK_MAINTENANCE,
     RECREATION_LAND_VALUE,
     FIRE_UPDATE_INTERVAL,
     FIRE_IGNITION_PROB,
@@ -197,16 +195,10 @@ class Simulation:
 
     def _update_all_tiles(self) -> None:
         for x, y, tile in self.city_map.iter_tiles():
-            if tile.zone == ZoneType.EMPTY:
+            if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
                 tile.residents = 0
                 tile.jobs = 0
-                tile.fire_risk = 0
-                tile.crime_risk = 0
-                continue
-
-            if tile.zone == ZoneType.PARK:
-                tile.residents = 0
-                tile.jobs = 0
+                tile.land_value = 1.0
                 tile.fire_risk = 0
                 tile.crime_risk = 0
                 continue
@@ -514,19 +506,31 @@ class Simulation:
         total_fire_risk = 0
         police_covered_zones = 0
         total_crime_risk = 0
+        education_covered_zones = 0
+        health_covered_zones = 0
         for _, _, tile in self.city_map.iter_tiles():
             if tile.zone in (ZoneType.EMPTY, ZoneType.PARK):
                 continue
             zoned_tiles += 1
-            service_points += int(tile.police_coverage) + int(tile.fire_coverage) + int(tile.education_coverage)
+            service_points += (
+                int(tile.police_coverage) + int(tile.fire_coverage)
+                + int(tile.education_coverage) + int(tile.health_coverage)
+            )
             fire_covered_zones += int(tile.fire_coverage)
             total_fire_risk += tile.fire_risk
             police_covered_zones += int(tile.police_coverage)
             total_crime_risk += tile.crime_risk
+            education_covered_zones += int(tile.education_coverage)
+            health_covered_zones += int(tile.health_coverage)
         if zoned_tiles == 0:
             self._reset_coverage_stats()
         else:
-            self._update_coverage_stats(zoned_tiles, service_points, fire_covered_zones, total_fire_risk, police_covered_zones, total_crime_risk)
+            self._update_coverage_stats(
+                zoned_tiles, service_points,
+                fire_covered_zones, total_fire_risk,
+                police_covered_zones, total_crime_risk,
+                education_covered_zones, health_covered_zones,
+            )
 
     def _utility_capacity_factor(self) -> float:
         power_factor = self._capacity_factor(self.stats.power_capacity, self.stats.power_usage)
@@ -541,7 +545,7 @@ class Simulation:
 
     def _capacity_factor(self, capacity: int, usage: int) -> float:
         if usage <= 0:
-            return 1.0 if capacity > 0 else 0.0
+            return 1.0 if capacity > 0 else MIN_CAPACITY_FACTOR
         return max(MIN_CAPACITY_FACTOR, min(1.0, capacity / usage))
 
     def _reset_coverage_stats(self) -> None:
@@ -553,16 +557,30 @@ class Simulation:
         self.stats.police_coverage_percent = 0
         self.stats.police_uncovered_zones = 0
         self.stats.average_crime_risk = 0
+        self.stats.education_coverage_percent = 0
+        self.stats.health_coverage_percent = 0
 
-    def _update_coverage_stats(self, zoned_tiles: int, service_points: int, fire_covered: int, total_fire_risk: int, police_covered: int, total_crime_risk: int) -> None:
+    def _update_coverage_stats(
+        self,
+        zoned_tiles: int,
+        service_points: int,
+        fire_covered: int,
+        total_fire_risk: int,
+        police_covered: int,
+        total_crime_risk: int,
+        edu_covered: int,
+        health_covered: int,
+    ) -> None:
         """Calculate and update coverage and risk statistics."""
-        self.stats.service_score = int(service_points / (zoned_tiles * SERVICE_SCORE_DIVISOR) * 100)
+        self.stats.service_score = min(100, int(service_points / (zoned_tiles * SERVICE_SCORE_DIVISOR) * 100))
         self.stats.fire_coverage_percent = int(fire_covered / zoned_tiles * 100)
         self.stats.fire_uncovered_zones = zoned_tiles - fire_covered
         self.stats.average_fire_risk = int(total_fire_risk / zoned_tiles)
         self.stats.police_coverage_percent = int(police_covered / zoned_tiles * 100)
         self.stats.police_uncovered_zones = zoned_tiles - police_covered
         self.stats.average_crime_risk = int(total_crime_risk / zoned_tiles)
+        self.stats.education_coverage_percent = int(edu_covered / zoned_tiles * 100)
+        self.stats.health_coverage_percent = int(health_covered / zoned_tiles * 100)
 
     def _supply_percent(self, capacity: int, usage: int) -> int:
         if usage <= 0:
@@ -719,6 +737,10 @@ class Simulation:
                 messages.append("Some zones are outside police station coverage.")
             if self.stats.average_crime_risk >= HIGH_RISK_THRESHOLD:
                 messages.append("City crime risk is high. Add police stations.")
+            if self.stats.education_coverage_percent < 50 and self.stats.population >= 500:
+                messages.append("Build schools — education coverage boosts zone growth.")
+            if self.stats.health_coverage_percent < 50 and self.stats.population >= 1000:
+                messages.append("Build hospitals — health coverage grows your city faster.")
 
         if not messages:
             if self.stats.last_population_delta > 0:

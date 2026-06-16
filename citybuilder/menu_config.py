@@ -1,7 +1,7 @@
 """Configuration passed from the main menu to the Game."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 MAP_SIZES: dict[str, tuple[int, int]] = {
     "Small":  (32, 24),

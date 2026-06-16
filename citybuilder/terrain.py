@@ -120,12 +120,12 @@ def _add_lake(city_map: CityMap, rng: random.Random) -> None:
     center_x = rng.randrange(city_map.width)
     center_y = rng.randrange(city_map.height)
     radius = rng.randint(3, 7)
-    
+    noise_seed = rng.randint(0, 99999)
+
     for x in range(max(0, center_x - radius), min(city_map.width, center_x + radius + 1)):
         for y in range(max(0, center_y - radius), min(city_map.height, center_y + radius + 1)):
             distance = math.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
-            # Use noise to create irregular lake edges
-            noise = _simple_noise(x, y, 42)
+            noise = _simple_noise(x, y, noise_seed)
             edge_threshold = radius - (noise * 1.5)
             
             if distance <= edge_threshold:

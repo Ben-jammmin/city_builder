@@ -274,7 +274,7 @@ class _NewGameScreen:
         r2 = r1 + 74  # terrain style
         r3 = r2 + 74  # seed
         r4 = r3 + 68  # speed
-        r5 = r4 + 58  # day/night cycle
+        r5 = r4 + 70  # day/night cycle
         r6 = r5 + 58  # action buttons
 
         bw4 = (pW - 3 * gap) // 4
@@ -379,8 +379,8 @@ class _NewGameScreen:
             _blit_text(surf, speed_hints[self.speed.value], _font(12), _MUTED,
                        topleft=(lx, r4 + 42))
 
-            dn_hint = "Dusk → night → dawn overlay (90 s cycle)" if self.day_night.value == "On" else "No lighting changes"
-            _blit_text(surf, dn_hint, _font(12), _MUTED, topleft=(lx, r5 + 42))
+            if self.day_night.value == "On":
+                _blit_text(surf, "Dusk → night → dawn overlay (90 s cycle)", _font(12), _MUTED, topleft=(lx, r5 + 42))
 
             # Widgets
             self.map_size.draw(surf)

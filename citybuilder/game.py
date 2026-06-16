@@ -25,7 +25,6 @@ from .models import (
     ZoneType,
     menu_for_tool,
 )
-from .pedestrian import PedestrianSystem
 from .renderer import Renderer
 from .save_load import load_game, save_game
 from .menu_config import GameConfig
@@ -35,12 +34,11 @@ from .settings import (
     COLORS,
     COMMAND_BAR_HEIGHT,
     FPS,
-    PEDESTRIAN_MAX_COUNT,
-    PEDESTRIAN_SPAWN_RATE,
     POWER_LINE_COST,
     RECREATION_COST,
     ROAD_COST,
     SAVE_FILE,
+    SIM_SPEED_PRESETS,
     TERRAIN_CLEAR_COSTS,
     TILE_SIZE,
     WATER_PIPE_COST,
@@ -50,6 +48,7 @@ from .settings import (
     ZONE_LEVEL_COST_MULTIPLIERS,
     ZONE_LEVEL_LABELS,
 )
+from .pedestrian import PedestrianSystem
 from .simulation import Simulation
 from .sounds import SoundManager
 from .terrain import generate_terrain
@@ -70,7 +69,11 @@ class Game:
         self.quit_to_desktop = False
 
         self.save_path = Path(__file__).resolve().parent.parent / SAVE_FILE
-        self._sim_speed = cfg.sim_seconds_per_month
+        self._speed_index = min(
+            range(len(SIM_SPEED_PRESETS)),
+            key=lambda i: abs(SIM_SPEED_PRESETS[i][1] - cfg.sim_seconds_per_month),
+        )
+        self._sim_speed = SIM_SPEED_PRESETS[self._speed_index][1]
 
         if cfg.load_save and self.save_path.exists():
             self.map, self.stats = load_game(self.save_path)
@@ -80,7 +83,7 @@ class Game:
             self.stats = CityStats(money=cfg.starting_money)
 
         self.simulation = Simulation(self.map, self.stats)
-        self.pedestrian_system = PedestrianSystem(max_count=PEDESTRIAN_MAX_COUNT)
+        self.pedestrian_system = PedestrianSystem(max_count=50)
         viewport = pygame.Rect(0, 0, self.windowed_size[0], self.windowed_size[1] - COMMAND_BAR_HEIGHT)
         self.camera = Camera(self.map.width * TILE_SIZE, self.map.height * TILE_SIZE, viewport)
         self.renderer = Renderer()
@@ -97,7 +100,7 @@ class Game:
         self.last_mouse_pos = (0, 0)
         self.painted_this_drag: set[tuple[int, int]] = set()
         self.sounds = SoundManager()
-        self._prev_msg_count = len(self.stats.messages)
+        self._last_sound_msg: str = self.stats.messages[-1] if self.stats.messages else ""
         self._hint_font = pygame.font.SysFont("Segoe UI", 15)
 
     def run(self) -> bool:
@@ -107,10 +110,7 @@ class Game:
             self._handle_events()
             self._handle_keyboard_camera(dt)
             self.simulation.update(dt, self._sim_speed)
-            self.pedestrian_system.update(
-                dt, self.map.width, self.map.height,
-                self.stats.population, PEDESTRIAN_SPAWN_RATE,
-            )
+            self.pedestrian_system.update(dt, self.map.width, self.map.height, self.stats.population, 0.002)
             self._check_message_sounds()
             self._draw()
         return self.quit_to_desktop
@@ -150,6 +150,10 @@ class Game:
             self._toggle_fullscreen()
         elif event.key == pygame.K_SPACE:
             self.stats.paused = not self.stats.paused
+        elif event.key == pygame.K_LEFTBRACKET:
+            self._cycle_speed(-1)
+        elif event.key == pygame.K_RIGHTBRACKET:
+            self._cycle_speed(1)
         elif event.key == pygame.K_v:
             direction = -1 if event.mod & pygame.KMOD_SHIFT else 1
             self._cycle_view_mode(direction)
@@ -166,6 +170,15 @@ class Game:
             if key_name in TOOL_HOTKEYS:
                 self.active_tool = TOOL_HOTKEYS[key_name]
                 self.active_menu = menu_for_tool(self.active_tool)
+
+    def _cycle_speed(self, delta: int) -> None:
+        self._set_speed_index(self._speed_index + delta)
+
+    def _set_speed_index(self, idx: int) -> None:
+        self._speed_index = max(0, min(len(SIM_SPEED_PRESETS) - 1, idx))
+        self._sim_speed = SIM_SPEED_PRESETS[self._speed_index][1]
+        label = SIM_SPEED_PRESETS[self._speed_index][0]
+        self.stats.add_message(f"Speed set to {label}.")
 
     def _cycle_view_mode(self, direction: int = 1) -> None:
         current_index = VIEW_ORDER.index(self.view_mode)
@@ -271,6 +284,8 @@ class Game:
             self._save_game()
         elif kind == "load":
             self._load_game()
+        elif kind == "speed":
+            self._set_speed_index(value)
         elif kind == "toggle_menu":
             self.sidebar.minimized = not self.sidebar.minimized
             self._resize_layout(*self.screen.get_size())
@@ -351,8 +366,6 @@ class Game:
             self.stats.add_message("Zone already exists here.")
         elif tile.building != BuildingType.NONE or tile.has_road or tile.has_power_line or tile.has_water_pipe:
             self.stats.add_message("Tile already occupied.")
-        elif not self.map.has_adjacent_road(x, y):
-            self.stats.add_message("Zone needs adjacent road.")
         else:
             self.stats.add_message("Cannot place zone.")
 
@@ -481,6 +494,13 @@ class Game:
             return
         self.map, self.stats = load_game(self.save_path)
         self.simulation = Simulation(self.map, self.stats)
+        self.pedestrian_system.clear()
+        hw = self.camera.tile_w // 2
+        self.camera.map_width  = self.map.width
+        self.camera.map_height = self.map.height
+        self.camera.map_pixel_width  = (self.map.width + self.map.height) * hw + self.camera.tile_w
+        self.camera.map_pixel_height = (self.map.width + self.map.height) * (self.camera.tile_h // 2) + self.camera.tile_h * 4
+        self.camera._recenter()
         self._refresh_city_status()
         self.stats.add_message(f"Loaded {self.save_path.name}.")
 
@@ -491,22 +511,22 @@ class Game:
         return True
 
     def _refresh_city_status(self) -> None:
-        simulation = getattr(self, "simulation", None)
-        if simulation is not None:
-            simulation.refresh_systems()
+        self.simulation.refresh_systems()
 
     def _check_message_sounds(self) -> None:
-        current = len(self.stats.messages)
-        if current > self._prev_msg_count:
-            for msg in self.stats.messages[self._prev_msg_count:]:
-                ml = msg.lower()
-                if "fire outbreak" in ml:
-                    self.sounds.play("fire")
-                elif "milestone" in ml:
-                    self.sounds.play("milestone")
-                elif "crime incident" in ml:
-                    self.sounds.play("crime")
-        self._prev_msg_count = current
+        if not self.stats.messages:
+            return
+        latest = self.stats.messages[-1]
+        if latest == self._last_sound_msg:
+            return
+        self._last_sound_msg = latest
+        ml = latest.lower()
+        if "fire outbreak" in ml:
+            self.sounds.play("fire")
+        elif "milestone" in ml:
+            self.sounds.play("milestone")
+        elif "crime incident" in ml:
+            self.sounds.play("crime")
 
     def _jump_camera_minimap(self, pos: tuple[int, int]) -> None:
         mr = self.renderer.minimap_rect
@@ -523,14 +543,14 @@ class Game:
         tx = max(0, min(self.map.width - 1, tx))
         ty = max(0, min(self.map.height - 1, ty))
         vp = self.camera.viewport
-        cur = self.camera.screen_to_tile((vp.centerx, vp.centery), TILE_SIZE)
+        cur = self.camera.screen_to_tile((vp.centerx, vp.centery))
         if cur:
             dx = (tx - cur[0]) * TILE_SIZE
             dy = (ty - cur[1]) * TILE_SIZE
             self.camera.move(dx, dy)
 
     def _mouse_tile(self, pos: tuple[int, int]) -> tuple[int, int] | None:
-        tile_pos = self.camera.screen_to_tile(pos, TILE_SIZE)
+        tile_pos = self.camera.screen_to_tile(pos)
         if tile_pos is None:
             return None
         if not self.map.in_bounds(*tile_pos):
@@ -538,6 +558,7 @@ class Game:
         return tile_pos
 
     def _draw(self) -> None:
+        self.sidebar.speed_index = self._speed_index
         self.screen.fill(COLORS["background"])
         self.renderer.draw_map(
             self.screen,
@@ -563,9 +584,10 @@ class Game:
 
     def _draw_top_hint(self) -> None:
         font = self._hint_font
+        speed_label = SIM_SPEED_PRESETS[self._speed_index][0]
         text = (
             f"{TOOL_LABELS[self.active_tool]} tool | {VIEW_LABELS[self.view_mode]} view | "
-            "V view | Q/E rotate | WASD pan | Scroll zoom | F5 save | F9 load | Esc menu"
+            f"Speed: {speed_label} [ / ] | V view | Q/E rotate | WASD pan | Scroll zoom | F5 save | F9 load | Esc menu"
         )
         rendered = font.render(text, True, COLORS["text"])
         bg = pygame.Rect(12, 12, rendered.get_width() + 18, rendered.get_height() + 10)

@@ -98,7 +98,8 @@ class SaveLoadTests(unittest.TestCase):
             "stats": {"money": 500, "tax_rate": 10},
         }
 
-        city_map, stats = from_save_data(old_data)
+        with self.assertWarns(UserWarning):
+            city_map, stats = from_save_data(old_data)
 
         self.assertEqual(city_map.get(0, 0).zone, ZoneType.COMMERCIAL)
         self.assertEqual(city_map.get(0, 0).zone_level, 1)

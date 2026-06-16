@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS, BuildingType, RecreationType, TerrainType, Tile, ZoneType
-from .settings import RECREATION_MAINTENANCE, RECREATION_DEMAND_RES, RECREATION_DEMAND_COM, RECREATION_LAND_VALUE
+from .settings import RECREATION_MAINTENANCE, RECREATION_DEMAND_RES, RECREATION_DEMAND_COM
 
 
 class CityMap:
