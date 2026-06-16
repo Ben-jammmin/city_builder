@@ -467,6 +467,8 @@ class CityStats:
     exp_recreation: int = 0
     # The advisor message feed — last 5 messages are kept.
     messages: list[str] = field(default_factory=lambda: ["Game starts paused. Press Space or Run."])
+    # Last 12 months of (revenue, expenses) pairs for the budget trend display.
+    budget_history: list = field(default_factory=list)
 
     def clamp_tax_rate(self) -> None:
         """Keeps tax rate within the allowed 1-20 percent range."""
@@ -491,6 +493,10 @@ class CityStats:
         self.messages.append(message)
         # Only keep the five most recent messages to avoid the feed growing forever.
         self.messages = self.messages[-5:]
+
+    def add_city_message(self, message: str) -> None:
+        """Adds a simulation event message prefixed with the current in-game date."""
+        self.add_message(f"Y{self.year} M{self.month}: {message}")
 
     def demand_for(self, zone: ZoneType) -> int:
         """Returns the current demand value (0-100) for the given zone type."""

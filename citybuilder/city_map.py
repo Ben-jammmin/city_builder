@@ -198,14 +198,17 @@ class CityMap:
         tile = self.get(x, y)
         # Bulldoze any trees/forest cover when building here.
         self._clear_natural_cover(tile)
+        # Upgrading the density level of the same zone type keeps existing development
+        # so the player's grown city isn't reset — only a full rezone starts fresh.
+        upgrading_same_zone = (tile.zone == zone and level > tile.zone_level)
         tile.zone = zone
         tile.zone_level = level
         if zone == ZoneType.PARK and recreation_type is not None:
             tile.recreation_type = recreation_type
-        # Reset development so the zone starts fresh.
-        tile.development = 0.0
-        tile.residents = 0
-        tile.jobs = 0
+        if not upgrading_same_zone:
+            tile.development = 0.0
+            tile.residents = 0
+            tile.jobs = 0
         return True
 
     def place_road(self, x: int, y: int) -> bool:

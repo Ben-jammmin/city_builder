@@ -240,6 +240,7 @@ def stats_to_data(stats: CityStats) -> dict[str, Any]:
         "exp_buildings": stats.exp_buildings,
         "exp_recreation": stats.exp_recreation,
         "messages": stats.messages,
+        "budget_history": stats.budget_history,
     }
 
 
@@ -286,4 +287,5 @@ def stats_from_data(data: dict[str, Any]) -> CityStats:
         exp_buildings=data.get("exp_buildings", 0),
         exp_recreation=data.get("exp_recreation", 0),
         messages=data.get("messages", ["Loaded city."]),
+        budget_history=data.get("budget_history", []),
     )

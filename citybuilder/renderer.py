@@ -33,7 +33,7 @@ from .models import (
     BuildingType, RecreationType, TerrainType, Tool, ViewMode, ZoneType,
 )
 from .pedestrian import PedestrianSystem
-from .settings import COLORS, DAY_CYCLE_SECONDS, HIGH_RISK_THRESHOLD, TILE_SIZE
+from .settings import COLORS, DAY_CYCLE_SECONDS, HIGH_RISK_THRESHOLD, ROAD_TRAFFIC_CAPACITY, TILE_SIZE
 from .sprites import SpriteAtlas, tile_variant
 
 # ── Minimap colour palette ─────────────────────────────────────────────────────
@@ -310,6 +310,13 @@ class Renderer:
             # to match the current camera orientation.
             conn = _rotate_connections(city_map.road_connections(x, y), rotation)
             self.sprites.draw_road(surface, cx, cy, tw, th, conn)
+            # Tint congested roads: yellow at moderate load, red when heavily congested.
+            if tile.traffic_load > ROAD_TRAFFIC_CAPACITY // 2:
+                frac = min(1.0, tile.traffic_load / (ROAD_TRAFFIC_CAPACITY * 2.0))
+                r = min(255, int(200 + 55 * frac))
+                g = int(200 * (1.0 - frac))
+                alpha = int(55 + 80 * frac)
+                self._draw_diam_overlay(surface, cx, cy, tw, th, (r, g, 0, alpha))
         elif tile.building != BuildingType.NONE:
             self.sprites.draw_civic_building(surface, cx, cy, tw, th, tile.building, rotation)
         elif tile.zone != ZoneType.EMPTY:

@@ -252,6 +252,9 @@ class Simulation:
         self.stats.last_expenses = expenses
         # Net income applied to the player's budget.
         self.stats.money += revenue - expenses
+        # Record this month's finances for the budget trend display (keep 12 months).
+        self.stats.budget_history.append((revenue, expenses))
+        self.stats.budget_history = self.stats.budget_history[-12:]
         self.stats.advance_month()
         self._update_traffic()
         self._check_fire_ignition()
@@ -834,7 +837,7 @@ class Simulation:
             # Fire suppression: fire coverage + enough time → extinguish.
             if tile.fire_coverage and burn_time >= FIRE_SUPPRESS_TIME:
                 to_extinguish.append(pos)
-                self.stats.add_message("Fire contained by fire station.")
+                self.stats.add_city_message("Fire contained by fire station.")
                 continue
 
             # Fires burn out naturally after a long time regardless.
@@ -887,7 +890,7 @@ class Simulation:
             x, y = random.choice(candidates)
             self._ignite_tile(x, y)
             self.stats.money -= FIRE_EMERGENCY_COST
-            self.stats.add_message(f"Fire outbreak! Emergency services: ${FIRE_EMERGENCY_COST}.")
+            self.stats.add_city_message(f"Fire outbreak! Emergency services: ${FIRE_EMERGENCY_COST}.")
 
     # ── Crime incident ─────────────────────────────────────────────────────────
 
@@ -913,7 +916,7 @@ class Simulation:
         tile = self.city_map.get(x, y)
         tile.development = max(0.0, tile.development - CRIME_DAMAGE_RATE)
         self.stats.money -= CRIME_CLEANUP_COST
-        self.stats.add_message(f"Crime incident! Property damage. Cleanup: ${CRIME_CLEANUP_COST}.")
+        self.stats.add_city_message(f"Crime incident! Property damage. Cleanup: ${CRIME_CLEANUP_COST}.")
 
     # ── City milestones ────────────────────────────────────────────────────────
 
@@ -926,7 +929,7 @@ class Simulation:
             if self.stats.population >= pop and self.stats.milestone_pop < pop:
                 self.stats.milestone_pop = pop
                 self.stats.money += grant
-                self.stats.add_message(
+                self.stats.add_city_message(
                     f"Milestone: {title}! ({pop:,} residents) State grant: ${grant:,}."
                 )
                 break  # one milestone per month
@@ -978,5 +981,6 @@ class Simulation:
 
         # Add up to 3 messages, most important first, skipping any already in the feed.
         for message in reversed(messages[:3]):
-            if message not in self.stats.messages[-5:]:
-                self.stats.add_message(message)
+            timestamped = f"Y{self.stats.year} M{self.stats.month}: {message}"
+            if timestamped not in self.stats.messages[-5:]:
+                self.stats.add_message(timestamped)

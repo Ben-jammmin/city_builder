@@ -31,7 +31,7 @@ from .models import (
     Tool,
     ZoneType,
 )
-from .settings import COLORS, HIGH_RISK_THRESHOLD, MAX_TAX_RATE, MIN_TAX_RATE, ROAD_TRAFFIC_CAPACITY
+from .settings import COLORS, HIGH_RISK_THRESHOLD, MAX_TAX_RATE, MIN_TAX_RATE, POPULATION_MILESTONES, ROAD_TRAFFIC_CAPACITY
 
 # ── Layout constants ───────────────────────────────────────────────────────────
 PANEL_GAP = 6    # vertical gap between stacked panels
@@ -142,15 +142,16 @@ class SidebarPanelRenderer:
     # ── Panel draw methods ─────────────────────────────────────────────────────
 
     def draw_city_stats(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
-        """Draws the city overview panel (money, pop, jobs, date, revenue, net) and returns the bottom y."""
-        panel = self._panel(surface, x, y, width, 100)
+        """Draws the city overview panel (money, pop, jobs, date, revenue, net, goal) and returns the bottom y."""
+        panel = self._panel(surface, x, y, width, 130)
         self._draw_text(surface, "City", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         col_w = (width - PANEL_PAD * 2) // 2
         left_x = panel.x + PANEL_PAD
         right_x = left_x + col_w
-        row_one = panel.y + 32
-        row_two = panel.y + 54
-        row_three = panel.y + 76
+        row_one   = panel.y + 32
+        row_two   = panel.y + 52
+        row_three = panel.y + 72
+        row_four  = panel.y + 96
 
         self._draw_stat_pair(surface, "Money", f"${stats.money:,}", left_x, row_one, col_w, stats.money >= 0)
         self._draw_stat_pair(surface, "Pop", f"{stats.population:,}", right_x, row_one, col_w)
@@ -159,6 +160,26 @@ class SidebarPanelRenderer:
         net = stats.last_revenue - stats.last_expenses
         self._draw_stat_pair(surface, "Rev", f"${stats.last_revenue:,}", left_x, row_three, col_w, True)
         self._draw_stat_pair(surface, "Net", (f"+${net:,}" if net >= 0 else f"-${-net:,}"), right_x, row_three, col_w, net >= 0)
+
+        # Next population milestone goal with a compact progress bar.
+        next_ms = next((ms for ms in POPULATION_MILESTONES if stats.population < ms[0]), None)
+        if next_ms:
+            goal_pop, goal_title, _ = next_ms
+            frac = min(1.0, stats.population / goal_pop) if goal_pop > 0 else 1.0
+            bar_x = left_x
+            bar_w = width - PANEL_PAD * 2
+            bar_h = 8
+            bar_y = row_four + 12
+            label = f"Goal: {goal_title}  {stats.population:,}/{goal_pop:,}"
+            self._draw_text(surface, label, bar_x, row_four, self.sidebar.font_small, COLORS["muted_text"])
+            pygame.draw.rect(surface, (35, 45, 55), pygame.Rect(bar_x, bar_y, bar_w, bar_h), border_radius=3)
+            if frac > 0:
+                fill_c = COLORS["money_good"] if frac >= 0.8 else COLORS["commercial"]
+                pygame.draw.rect(surface, fill_c, pygame.Rect(bar_x, bar_y, int(bar_w * frac), bar_h), border_radius=3)
+        else:
+            # All milestones reached.
+            self._draw_text(surface, "All milestones achieved!", left_x, row_four, self.sidebar.font_small, COLORS["money_good"])
+
         return panel.bottom
 
     def draw_menu_tabs(self, surface: pygame.Surface, x: int, y: int, width: int, active_menu: str) -> int:

@@ -77,6 +77,13 @@ class PedestrianSystem:
         # Fractional spawn credit accumulates each frame and converts to real
         # pedestrians once it reaches 1.0.
         self.spawn_accumulator = 0.0
+        # Cached list of road tile positions for realistic spawning.
+        # Updated by game.py whenever the map changes.
+        self.road_tiles: list[tuple[int, int]] = []
+
+    def update_road_tiles(self, city_map) -> None:
+        """Refreshes the list of road tiles used when spawning new pedestrians."""
+        self.road_tiles = [(x, y) for x, y, t in city_map.iter_tiles() if t.has_road]
 
     def update(self, dt: float, map_width: int, map_height: int, population: int, spawn_rate: float) -> None:
         """Ticks all pedestrians and spawns new ones proportional to population size."""
@@ -92,9 +99,15 @@ class PedestrianSystem:
                 self._spawn_pedestrian(map_width, map_height)
 
     def _spawn_pedestrian(self, map_width: int, map_height: int) -> None:
-        """Creates a new Pedestrian at a random position anywhere on the map."""
-        x = random.random() * map_width
-        y = random.random() * map_height
+        """Creates a new Pedestrian near a road tile, or anywhere if no roads exist yet."""
+        if self.road_tiles:
+            # Pick a random road tile and spawn with a small sub-tile offset.
+            tx, ty = random.choice(self.road_tiles)
+            x = tx + random.random()
+            y = ty + random.random()
+        else:
+            x = random.random() * map_width
+            y = random.random() * map_height
         self.pedestrians.append(Pedestrian(x=x, y=y))
 
     def clear(self) -> None:

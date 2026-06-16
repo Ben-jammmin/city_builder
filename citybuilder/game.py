@@ -27,6 +27,7 @@ Key design decisions
 """
 from __future__ import annotations
 
+import copy
 import pygame
 
 from .camera import Camera
@@ -190,6 +191,102 @@ class SaveOverlay:
         return None
 
 
+class HelpOverlay:
+    """
+    Full-screen overlay showing keyboard shortcuts and gameplay tips.
+    Triggered by F1; closed by F1 or Escape.
+    """
+
+    _SECTIONS = [
+        ("Camera & Speed", [
+            ("WASD / Arrows", "Pan the map"),
+            ("Scroll wheel",  "Zoom in / out"),
+            ("Middle drag",   "Pan the map"),
+            ("Q / E",         "Rotate camera"),
+            ("V",             "Cycle view mode (Power/Water/Fire/Police/Terrain)"),
+            ("[ / ]",         "Slower / faster simulation speed"),
+            ("Space",         "Pause / resume"),
+        ]),
+        ("Building", [
+            ("Left click",   "Place active tool"),
+            ("Right click",  "Bulldoze tile"),
+            ("Drag",         "Paint multiple tiles"),
+            ("Ctrl+Z",       "Undo last action"),
+            ("1",  "Residential zone"),
+            ("2",  "Commercial zone"),
+            ("3",  "Industrial zone"),
+            ("4",  "Road"),
+            ("5",  "Power line"),
+            ("6",  "Water pipe"),
+            ("7",  "Power plant"),
+            ("8",  "Water tower"),
+            ("9",  "Bulldoze"),
+        ]),
+        ("Other", [
+            ("F5",      "Save game"),
+            ("F9",      "Load game"),
+            ("F11",     "Toggle fullscreen"),
+            ("F1",      "This help screen"),
+            ("Esc",     "Close overlay / quit to menu"),
+        ]),
+    ]
+
+    def __init__(self) -> None:
+        self.visible = False
+        self._font: pygame.font.Font | None = None
+        self._font_sm: pygame.font.Font | None = None
+
+    def open(self) -> None:
+        self.visible = True
+
+    def close(self) -> None:
+        self.visible = False
+
+    def _ensure_fonts(self) -> None:
+        if self._font is None:
+            self._font = pygame.font.SysFont("Segoe UI", 17, bold=True)
+            self._font_sm = pygame.font.SysFont("Segoe UI", 14)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        self._ensure_fonts()
+        W, H = surface.get_size()
+
+        dim = pygame.Surface((W, H), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 180))
+        surface.blit(dim, (0, 0))
+
+        panel_w = min(680, W - 40)
+        panel_h = min(540, H - 40)
+        panel = pygame.Rect(W // 2 - panel_w // 2, H // 2 - panel_h // 2, panel_w, panel_h)
+        pygame.draw.rect(surface, (18, 24, 32), panel, border_radius=10)
+        pygame.draw.rect(surface, (55, 90, 130), panel, width=2, border_radius=10)
+
+        title = self._font.render("Help — Keyboard Shortcuts  [F1 or Esc to close]", True, (235, 239, 242))
+        surface.blit(title, (panel.centerx - title.get_width() // 2, panel.y + 14))
+
+        col_w = (panel_w - 40) // 2
+        cx = [panel.x + 16, panel.x + 16 + col_w + 8]
+        cy = [panel.y + 50, panel.y + 50]
+
+        for i, (heading, items) in enumerate(self._SECTIONS):
+            col = 0 if i < 2 else 1
+            x = cx[col]
+            y = cy[col]
+
+            hdr = self._font.render(heading, True, (140, 190, 240))
+            surface.blit(hdr, (x, y))
+            cy[col] += 22
+
+            for key, desc in items:
+                key_s = self._font_sm.render(key, True, (220, 232, 240))
+                desc_s = self._font_sm.render(desc, True, (160, 175, 185))
+                surface.blit(key_s, (x, cy[col]))
+                surface.blit(desc_s, (x + 120, cy[col]))
+                cy[col] += 18
+
+            cy[col] += 8
+
+
 class Game:
     """Top-level game object — owns the map, camera, renderer, sidebar, and simulation."""
 
@@ -206,6 +303,12 @@ class Game:
         self.quit_to_desktop = False   # True = close the app; False = back to menu
 
         self.save_overlay = SaveOverlay()
+        self.help_overlay = HelpOverlay()
+        # Undo stack: each entry is (money_before_drag, [(x, y, tile_snapshot), ...]).
+        # Capped at 20 entries so memory stays bounded.
+        self._undo_stack: list[tuple[int, list[tuple[int, int, object]]]] = []
+        self._current_undo_group: list[tuple[int, int, object]] = []
+        self._undo_money_before: int = 0
         # Find the speed preset closest to the one chosen in GameConfig.
         self._speed_index = min(
             range(len(SIM_SPEED_PRESETS)),
@@ -285,12 +388,21 @@ class Game:
         self.hover_tile = self._mouse_tile(pygame.mouse.get_pos())
 
     def _handle_keydown(self, event: pygame.event.Event) -> None:
-        """Handles keyboard shortcuts: Escape, F5/F9, F11, Space, Q/E, V, +/-, WASD, hotkeys."""
+        """Handles keyboard shortcuts: Escape, F1/F5/F9, F11, Ctrl+Z, Space, Q/E, V, +/-, WASD, hotkeys."""
         if event.key == pygame.K_ESCAPE:
             if self.save_overlay.visible:
                 self.save_overlay.close()
+            elif self.help_overlay.visible:
+                self.help_overlay.close()
             else:
                 self.running = False
+        elif event.key == pygame.K_F1:
+            if self.help_overlay.visible:
+                self.help_overlay.close()
+            else:
+                self.help_overlay.open()
+        elif event.key == pygame.K_z and (event.mod & pygame.KMOD_CTRL):
+            self._undo()
         elif event.key == pygame.K_F5:
             self._open_save_overlay()
         elif event.key == pygame.K_F9:
@@ -391,7 +503,9 @@ class Game:
     # ── Mouse input ────────────────────────────────────────────────────────────
 
     def _handle_mouse_down(self, event: pygame.event.Event) -> None:
-        """Handles MOUSEBUTTONDOWN: save overlay, minimap click, sidebar, or map painting."""
+        """Handles MOUSEBUTTONDOWN: save overlay, help overlay, minimap click, sidebar, or map painting."""
+        if self.help_overlay.visible:
+            return
         if self.save_overlay.visible:
             if event.button == 1:
                 result = self.save_overlay.handle_click(event.pos)
@@ -421,25 +535,36 @@ class Game:
         if event.button == 1:
             self.painting = True
             self.painted_this_drag.clear()
+            self._undo_money_before = self.stats.money
+            self._current_undo_group = []
             self._apply_tool_at_mouse(event.pos)
         elif event.button == 2:
             self.dragging_camera = True
         elif event.button == 3:
             self.painting = True
             self.painted_this_drag.clear()
+            self._undo_money_before = self.stats.money
+            self._current_undo_group = []
             self._bulldoze_at_mouse(event.pos)
 
     def _handle_mouse_up(self, event: pygame.event.Event) -> None:
         """Ends the current painting or camera-drag drag when the mouse button is released."""
         if event.button in (1, 3):
             self.painting = False
+            # Commit the undo group collected during this drag.
+            if self._current_undo_group:
+                self._undo_stack.append((self._undo_money_before, self._current_undo_group))
+                self._current_undo_group = []
+                # Cap stack to 20 entries so memory stays bounded.
+                if len(self._undo_stack) > 20:
+                    self._undo_stack.pop(0)
             self.painted_this_drag.clear()
         elif event.button == 2:
             self.dragging_camera = False
 
     def _handle_mouse_motion(self, event: pygame.event.Event) -> None:
         """Continues camera drag or paints more tiles while the mouse is held down."""
-        if self.save_overlay.visible:
+        if self.save_overlay.visible or self.help_overlay.visible:
             return
         if self.dragging_camera:
             dx = (self.last_mouse_pos[0] - event.pos[0]) / self.camera.zoom
@@ -478,7 +603,7 @@ class Game:
 
     def _handle_keyboard_camera(self, dt: float) -> None:
         """Pans the camera smoothly with WASD / arrow keys. Speed scales with dt and zoom."""
-        if self.save_overlay.visible:
+        if self.save_overlay.visible or self.help_overlay.visible:
             return
         keys = pygame.key.get_pressed()
         # Divide by zoom so panning feels consistent regardless of zoom level.
@@ -538,10 +663,15 @@ class Game:
         cost = self._zone_cost(zone, level, recreation_type)
         if not self._can_afford(cost):
             return
+        x, y = tile_pos
+        old_tile = copy.copy(self.map.get(x, y))
         if self.map.place_zone(*tile_pos, zone, level, recreation_type):
+            self._current_undo_group.append((x, y, old_tile))
             self.stats.money -= cost
             self.sounds.play("build")
-            self.stats.add_message(f"Zoned {self._zone_label(zone, level, recreation_type)} for ${cost}.")
+            upgrading = (old_tile.zone == zone and level > old_tile.zone_level)
+            label = "Upgraded to dense " + self._zone_label(zone, 1, recreation_type) if upgrading else self._zone_label(zone, level, recreation_type)
+            self.stats.add_message(f"Zoned {label} for ${cost}.")
             self._refresh_city_status()
         else:
             self._add_zone_blocked_message(tile_pos, zone, level, recreation_type)
@@ -580,7 +710,10 @@ class Game:
     def _place_road(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(ROAD_COST):
             return
+        x, y = tile_pos
+        old_tile = copy.copy(self.map.get(x, y))
         if self.map.place_road(*tile_pos):
+            self._current_undo_group.append((x, y, old_tile))
             self.stats.money -= ROAD_COST
             self.sounds.play("build")
             self.stats.add_message(f"Built road for ${ROAD_COST}.")
@@ -599,7 +732,10 @@ class Game:
     def _place_power_line(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(POWER_LINE_COST):
             return
+        x, y = tile_pos
+        old_tile = copy.copy(self.map.get(x, y))
         if self.map.place_power_line(*tile_pos):
+            self._current_undo_group.append((x, y, old_tile))
             self.stats.money -= POWER_LINE_COST
             self.stats.add_message(f"Built power line for ${POWER_LINE_COST}.")
             self._refresh_city_status()
@@ -617,7 +753,10 @@ class Game:
     def _place_water_pipe(self, tile_pos: tuple[int, int]) -> None:
         if not self._can_afford(WATER_PIPE_COST):
             return
+        x, y = tile_pos
+        old_tile = copy.copy(self.map.get(x, y))
         if self.map.place_water_pipe(*tile_pos):
+            self._current_undo_group.append((x, y, old_tile))
             self.stats.money -= WATER_PIPE_COST
             self.stats.add_message(f"Built water pipe for ${WATER_PIPE_COST}.")
             self._refresh_city_status()
@@ -637,7 +776,10 @@ class Game:
         cost = BUILDING_COST[building.value]
         if not self._can_afford(cost):
             return
+        x, y = tile_pos
+        old_tile = copy.copy(self.map.get(x, y))
         if self.map.place_building(*tile_pos, building):
+            self._current_undo_group.append((x, y, old_tile))
             self.stats.money -= cost
             self.sounds.play("build")
             self.stats.add_message(f"Built {TOOL_LABELS[self.active_tool]} for ${cost}.")
@@ -680,7 +822,9 @@ class Game:
         
         if not self._can_afford(cost):
             return
+        old_tile = copy.copy(tile)
         if self.map.bulldoze(*tile_pos):
+            self._current_undo_group.append((x, y, old_tile))
             self.stats.money -= cost
             self.sounds.play("bulldoze")
             self.stats.add_message(f"Cleared {item_name} for ${cost}.")
@@ -743,6 +887,35 @@ class Game:
     def _refresh_city_status(self) -> None:
         """Re-runs the BFS utility/coverage sweep so stats are immediately up to date."""
         self.simulation.refresh_systems()
+        self.pedestrian_system.update_road_tiles(self.map)
+
+    def _undo(self) -> None:
+        """Restores the last painting drag — tiles and money are rolled back."""
+        if not self._undo_stack:
+            self.stats.add_message("Nothing to undo.")
+            return
+        money_before, snapshots = self._undo_stack.pop()
+        self.stats.money = money_before
+        for x, y, old_tile in snapshots:
+            self.map.tiles[x][y] = old_tile
+        self._refresh_city_status()
+        self.stats.add_message("Action undone.")
+
+    def _preview_cost(self) -> int:
+        """Returns the cost of placing the active tool on one tile (0 for inspect/bulldoze)."""
+        if self.active_tool == Tool.ROAD:
+            return ROAD_COST
+        if self.active_tool == Tool.POWER_LINE:
+            return POWER_LINE_COST
+        if self.active_tool == Tool.WATER_PIPE:
+            return WATER_PIPE_COST
+        if self.active_tool in TOOL_TO_BUILDING:
+            return BUILDING_COST[TOOL_TO_BUILDING[self.active_tool].value]
+        if self.active_tool in TOOL_TO_ZONE:
+            zone, level = TOOL_TO_ZONE[self.active_tool]
+            rec = TOOL_TO_RECREATION.get(self.active_tool)
+            return self._zone_cost(zone, level, rec)
+        return 0
 
     def _check_message_sounds(self) -> None:
         """Plays a sound effect when the latest advisor message matches a known keyword."""
@@ -832,15 +1005,27 @@ class Game:
         self._draw_top_hint()
         if self.save_overlay.visible:
             self.save_overlay.draw(self.screen)
+        if self.help_overlay.visible:
+            self.help_overlay.draw(self.screen)
         pygame.display.flip()
 
     def _draw_top_hint(self) -> None:
-        """Draws the thin toolbar at the top of the screen showing active tool, view, and hotkeys."""
+        """Draws the thin toolbar at the top of the screen showing active tool, view, hotkeys, and cost preview."""
         font = self._hint_font
         speed_label = SIM_SPEED_PRESETS[self._speed_index][0]
+
+        cost_text = ""
+        if self.hover_tile is not None and self.active_tool not in (Tool.INSPECT, Tool.BULLDOZE):
+            cost = self._preview_cost()
+            if cost > 0:
+                can_afford = self.stats.money >= cost
+                cost_text = f" | Cost: ${cost:,}" + ("" if can_afford else " (need more money)")
+
         text = (
             f"{TOOL_LABELS[self.active_tool]} tool | {VIEW_LABELS[self.view_mode]} view | "
-            f"Speed: {speed_label} [ / ] | V view | Q/E rotate | WASD pan | Scroll zoom | F5 save | F9 load | Esc"
+            f"Speed: {speed_label} [ / ] | V view | Q/E rotate | WASD pan | Scroll zoom"
+            f" | F5 save | F9 load | Ctrl+Z undo | F1 help | Esc"
+            + cost_text
         )
         rendered = font.render(text, True, COLORS["text"])
         bg = pygame.Rect(12, 12, rendered.get_width() + 18, rendered.get_height() + 10)
