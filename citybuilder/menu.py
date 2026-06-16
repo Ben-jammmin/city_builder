@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import random
 import sys
-from pathlib import Path
-
 import pygame
 
 from .menu_config import (
     DIFFICULTY_MONEY, MAP_SIZES, SIM_SPEED_SECONDS, TERRAIN_STYLES, GameConfig,
 )
-from .settings import SAVE_FILE, WINDOW_HEIGHT, WINDOW_WIDTH
+from .save_load import most_recent_slot
+from .settings import WINDOW_HEIGHT, WINDOW_WIDTH
 
 # ── Colours (match game's dark sidebar palette) ───────────────────────────────
 _BG      = (14, 18, 24)
@@ -476,10 +475,8 @@ def run_main_menu() -> GameConfig | None:
         screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
     pygame.display.set_caption("City Builder")
 
-    save_path = Path(__file__).resolve().parent.parent / SAVE_FILE
-
     while True:
-        result = _MainMenuScreen(screen, save_path.exists()).run()
+        result = _MainMenuScreen(screen, most_recent_slot() is not None).run()
 
         if result == "quit":
             return None

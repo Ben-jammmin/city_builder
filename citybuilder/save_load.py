@@ -7,8 +7,57 @@ from typing import Any
 
 from .city_map import CityMap
 from .models import BuildingType, CityStats, RecreationType, TerrainType, Tile, ZoneType
+from .settings import NUM_SAVE_SLOTS, SAVE_DIR
 
 SAVE_VERSION = 4
+
+
+def _saves_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / SAVE_DIR
+
+
+def slot_path(slot: int) -> Path:
+    d = _saves_dir()
+    d.mkdir(exist_ok=True)
+    return d / f"slot_{slot}.json"
+
+
+def slot_metadata(slot: int) -> dict | None:
+    p = _saves_dir() / f"slot_{slot}.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        stats = data.get("stats", {})
+        m = data.get("map", {})
+        return {
+            "slot": slot,
+            "year": stats.get("year", 1),
+            "month": stats.get("month", 1),
+            "population": stats.get("population", 0),
+            "money": stats.get("money", 0),
+            "map_size": f"{m.get('width', 0)}x{m.get('height', 0)}",
+        }
+    except Exception:
+        return None
+
+
+def list_saves() -> list[dict | None]:
+    return [slot_metadata(i) for i in range(1, NUM_SAVE_SLOTS + 1)]
+
+
+def most_recent_slot() -> int | None:
+    saves_dir = _saves_dir()
+    best_slot: int | None = None
+    best_mtime = 0.0
+    for slot in range(1, NUM_SAVE_SLOTS + 1):
+        p = saves_dir / f"slot_{slot}.json"
+        if p.exists():
+            mtime = p.stat().st_mtime
+            if mtime > best_mtime:
+                best_mtime = mtime
+                best_slot = slot
+    return best_slot
 
 
 def save_game(city_map: CityMap, stats: CityStats, path: str | Path) -> None:
@@ -76,6 +125,7 @@ def tile_to_data(tile: Tile) -> dict[str, Any]:
         "land_value": tile.land_value,
         "fire_risk": tile.fire_risk,
         "crime_risk": tile.crime_risk,
+        "on_fire": tile.on_fire,
     }
 
 
@@ -95,6 +145,7 @@ def tile_from_data(data: dict[str, Any]) -> Tile:
         land_value=data.get("land_value", 1.0),
         fire_risk=data.get("fire_risk", 0),
         crime_risk=data.get("crime_risk", 0),
+        on_fire=data.get("on_fire", False),
     )
 
 

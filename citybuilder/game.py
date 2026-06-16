@@ -1,8 +1,6 @@
 """Main game loop — handles input, runs the simulation, and draws every frame."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pygame
 
 from .camera import Camera
@@ -26,7 +24,7 @@ from .models import (
     menu_for_tool,
 )
 from .renderer import Renderer
-from .save_load import load_game, save_game
+from .save_load import list_saves, load_game, most_recent_slot, save_game, slot_path
 from .menu_config import GameConfig
 from .settings import (
     BUILDING_COST,
@@ -34,10 +32,10 @@ from .settings import (
     COLORS,
     COMMAND_BAR_HEIGHT,
     FPS,
+    NUM_SAVE_SLOTS,
     POWER_LINE_COST,
     RECREATION_COST,
     ROAD_COST,
-    SAVE_FILE,
     SIM_SPEED_PRESETS,
     TERRAIN_CLEAR_COSTS,
     TILE_SIZE,
@@ -55,6 +53,108 @@ from .terrain import generate_terrain
 from .ui import Sidebar
 
 
+class SaveOverlay:
+    """Full-screen dimmed overlay for choosing a save/load slot."""
+
+    def __init__(self) -> None:
+        self.visible = False
+        self.mode = "save"  # "save" or "load"
+        self._slot_rects: list[pygame.Rect] = []
+        self._cancel_rect = pygame.Rect(0, 0, 0, 0)
+        self._saves: list[dict | None] = [None] * NUM_SAVE_SLOTS
+        self._font: pygame.font.Font | None = None
+        self._font_sm: pygame.font.Font | None = None
+
+    def open(self, mode: str) -> None:
+        self.visible = True
+        self.mode = mode
+        self._saves = list_saves()
+
+    def close(self) -> None:
+        self.visible = False
+
+    def _ensure_fonts(self) -> None:
+        if self._font is None:
+            self._font = pygame.font.SysFont("Segoe UI", 18, bold=True)
+            self._font_sm = pygame.font.SysFont("Segoe UI", 15)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        self._ensure_fonts()
+        W, H = surface.get_size()
+
+        dim = pygame.Surface((W, H), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 170))
+        surface.blit(dim, (0, 0))
+
+        panel_w = min(520, W - 40)
+        slot_h = 54
+        panel_h = 60 + NUM_SAVE_SLOTS * (slot_h + 8) + 52
+        panel = pygame.Rect(W // 2 - panel_w // 2, H // 2 - panel_h // 2, panel_w, panel_h)
+        pygame.draw.rect(surface, (18, 24, 32), panel, border_radius=10)
+        pygame.draw.rect(surface, (55, 90, 130), panel, width=2, border_radius=10)
+
+        title = "Save Game — Choose a Slot" if self.mode == "save" else "Load Game — Choose a Slot"
+        t = self._font.render(title, True, (235, 239, 242))
+        surface.blit(t, (panel.centerx - t.get_width() // 2, panel.y + 16))
+
+        mouse = pygame.mouse.get_pos()
+        self._slot_rects = []
+        for i, meta in enumerate(self._saves):
+            slot_rect = pygame.Rect(panel.x + 18, panel.y + 52 + i * (slot_h + 8), panel_w - 36, slot_h)
+            self._slot_rects.append(slot_rect)
+
+            is_empty = meta is None
+            clickable = not is_empty or self.mode == "save"
+            hovered = clickable and slot_rect.collidepoint(mouse)
+
+            if is_empty:
+                bg = (34, 46, 60) if hovered else (24, 34, 44)
+                border = (40, 58, 78)
+                label_col = (90, 110, 130)
+            else:
+                bg = (40, 56, 76) if hovered else (28, 38, 52)
+                border = (90, 130, 180) if hovered else (55, 82, 112)
+                label_col = (130, 155, 180)
+
+            pygame.draw.rect(surface, bg, slot_rect, border_radius=6)
+            pygame.draw.rect(surface, border, slot_rect, width=1, border_radius=6)
+
+            sl = self._font_sm.render(f"Slot {i + 1}", True, label_col)
+            surface.blit(sl, (slot_rect.x + 14, slot_rect.centery - sl.get_height() // 2))
+
+            if is_empty:
+                et = self._font_sm.render("— Empty —", True, (70, 88, 105))
+                surface.blit(et, (slot_rect.x + 88, slot_rect.centery - et.get_height() // 2))
+            else:
+                pt = self._font_sm.render(
+                    f"Pop {meta['population']:,}  ${meta['money']:,}", True, (220, 232, 240))
+                surface.blit(pt, (slot_rect.x + 88, slot_rect.y + 10))
+                dt = self._font_sm.render(
+                    f"Year {meta['year']}  Month {meta['month']}  {meta['map_size']} map",
+                    True, (140, 162, 182))
+                surface.blit(dt, (slot_rect.x + 88, slot_rect.y + 30))
+
+        cancel_w = 130
+        self._cancel_rect = pygame.Rect(panel.centerx - cancel_w // 2, panel.bottom - 44, cancel_w, 30)
+        c_hov = self._cancel_rect.collidepoint(mouse)
+        pygame.draw.rect(surface, (48, 60, 76) if c_hov else (36, 46, 58), self._cancel_rect, border_radius=5)
+        pygame.draw.rect(surface, (60, 76, 96), self._cancel_rect, width=1, border_radius=5)
+        ct = self._font_sm.render("Cancel  [Esc]", True, (200, 212, 224))
+        surface.blit(ct, (self._cancel_rect.centerx - ct.get_width() // 2,
+                          self._cancel_rect.centery - ct.get_height() // 2))
+
+    def handle_click(self, pos: tuple[int, int]) -> int | str | None:
+        """Returns 1-5 (slot number), 'cancel', or None if not handled."""
+        if self._cancel_rect.collidepoint(pos):
+            return "cancel"
+        for i, rect in enumerate(self._slot_rects):
+            if rect.collidepoint(pos):
+                if self.mode == "load" and self._saves[i] is None:
+                    return None
+                return i + 1
+        return None
+
+
 class Game:
     def __init__(self, config: GameConfig | None = None) -> None:
         cfg = config if config is not None else GameConfig()
@@ -68,15 +168,16 @@ class Game:
         self.running = True
         self.quit_to_desktop = False
 
-        self.save_path = Path(__file__).resolve().parent.parent / SAVE_FILE
+        self.save_overlay = SaveOverlay()
         self._speed_index = min(
             range(len(SIM_SPEED_PRESETS)),
             key=lambda i: abs(SIM_SPEED_PRESETS[i][1] - cfg.sim_seconds_per_month),
         )
         self._sim_speed = SIM_SPEED_PRESETS[self._speed_index][1]
 
-        if cfg.load_save and self.save_path.exists():
-            self.map, self.stats = load_game(self.save_path)
+        recent = most_recent_slot() if cfg.load_save else None
+        if recent is not None:
+            self.map, self.stats = load_game(slot_path(recent))
         else:
             self.map = CityMap(cfg.map_width, cfg.map_height)
             generate_terrain(self.map, seed=cfg.terrain_seed, style=cfg.terrain_style_key)
@@ -141,11 +242,14 @@ class Game:
 
     def _handle_keydown(self, event: pygame.event.Event) -> None:
         if event.key == pygame.K_ESCAPE:
-            self.running = False
+            if self.save_overlay.visible:
+                self.save_overlay.close()
+            else:
+                self.running = False
         elif event.key == pygame.K_F5:
-            self._save_game()
+            self._open_save_overlay()
         elif event.key == pygame.K_F9:
-            self._load_game()
+            self._open_load_overlay()
         elif event.key == pygame.K_F11 or (event.key == pygame.K_RETURN and event.mod & pygame.KMOD_ALT):
             self._toggle_fullscreen()
         elif event.key == pygame.K_SPACE:
@@ -224,6 +328,19 @@ class Game:
         self.camera.set_viewport(pygame.Rect(0, 0, width, map_height))
 
     def _handle_mouse_down(self, event: pygame.event.Event) -> None:
+        if self.save_overlay.visible:
+            if event.button == 1:
+                result = self.save_overlay.handle_click(event.pos)
+                if result == "cancel":
+                    self.save_overlay.close()
+                elif isinstance(result, int):
+                    if self.save_overlay.mode == "save":
+                        self._do_save(result)
+                    else:
+                        self._do_load(result)
+                    self.save_overlay.close()
+            return
+
         self.last_mouse_pos = event.pos
 
         # Minimap click-to-jump
@@ -256,6 +373,8 @@ class Game:
             self.dragging_camera = False
 
     def _handle_mouse_motion(self, event: pygame.event.Event) -> None:
+        if self.save_overlay.visible:
+            return
         if self.dragging_camera:
             dx = (self.last_mouse_pos[0] - event.pos[0]) / self.camera.zoom
             dy = (self.last_mouse_pos[1] - event.pos[1]) / self.camera.zoom
@@ -281,9 +400,9 @@ class Game:
         elif kind == "fullscreen":
             self._toggle_fullscreen()
         elif kind == "save":
-            self._save_game()
+            self._open_save_overlay()
         elif kind == "load":
-            self._load_game()
+            self._open_load_overlay()
         elif kind == "speed":
             self._set_speed_index(value)
         elif kind == "toggle_menu":
@@ -291,6 +410,8 @@ class Game:
             self._resize_layout(*self.screen.get_size())
 
     def _handle_keyboard_camera(self, dt: float) -> None:
+        if self.save_overlay.visible:
+            return
         keys = pygame.key.get_pressed()
         speed = 520 * dt / self.camera.zoom
         dx = 0.0
@@ -484,16 +605,31 @@ class Game:
             self.stats.add_message(f"Cleared {item_name} for ${cost}.")
             self._refresh_city_status()
 
-    def _save_game(self) -> None:
-        save_game(self.map, self.stats, self.save_path)
-        self.stats.add_message(f"Saved {self.save_path.name}.")
+    def _open_save_overlay(self) -> None:
+        self.save_overlay.open("save")
 
-    def _load_game(self) -> None:
-        if not self.save_path.exists():
-            self.stats.add_message("No save file found yet.")
+    def _open_load_overlay(self) -> None:
+        self.save_overlay.open("load")
+
+    def _do_save(self, slot: int) -> None:
+        save_game(self.map, self.stats, slot_path(slot))
+        self.stats.add_message(f"Saved to slot {slot}.")
+
+    def _do_load(self, slot: int) -> None:
+        p = slot_path(slot)
+        if not p.exists():
+            self.stats.add_message(f"Slot {slot} is empty.")
             return
-        self.map, self.stats = load_game(self.save_path)
+        try:
+            city_map, stats = load_game(p)
+        except Exception:
+            self.stats.add_message(f"Slot {slot} save data is corrupt and could not be loaded.")
+            return
+        self.map, self.stats = city_map, stats
         self.simulation = Simulation(self.map, self.stats)
+        for x, y, tile in self.map.iter_tiles():
+            if tile.on_fire:
+                self.simulation._fires[(x, y)] = 0.0
         self.pedestrian_system.clear()
         hw = self.camera.tile_w // 2
         self.camera.map_width  = self.map.width
@@ -502,7 +638,7 @@ class Game:
         self.camera.map_pixel_height = (self.map.width + self.map.height) * (self.camera.tile_h // 2) + self.camera.tile_h * 4
         self.camera._recenter()
         self._refresh_city_status()
-        self.stats.add_message(f"Loaded {self.save_path.name}.")
+        self.stats.add_message(f"Loaded slot {slot}.")
 
     def _can_afford(self, cost: int) -> bool:
         if self.stats.money < cost:
@@ -542,12 +678,17 @@ class Game:
         ty = int(frac_y * self.map.height)
         tx = max(0, min(self.map.width - 1, tx))
         ty = max(0, min(self.map.height - 1, ty))
+        # Convert the target tile to an isometric world-pixel position and
+        # scroll so that position lands at the centre of the viewport.
+        rtx, rty = self.camera._apply_rotation(tx, ty)
+        hw = self.camera.tile_w // 2
+        hh = self.camera.tile_h // 2
+        wx = (rtx - rty) * hw + self.camera._origin_x()
+        wy = (rtx + rty) * hh
         vp = self.camera.viewport
-        cur = self.camera.screen_to_tile((vp.centerx, vp.centery))
-        if cur:
-            dx = (tx - cur[0]) * TILE_SIZE
-            dy = (ty - cur[1]) * TILE_SIZE
-            self.camera.move(dx, dy)
+        self.camera.x = wx - vp.width / (2 * self.camera.zoom)
+        self.camera.y = wy - vp.height / (2 * self.camera.zoom)
+        self.camera.clamp()
 
     def _mouse_tile(self, pos: tuple[int, int]) -> tuple[int, int] | None:
         tile_pos = self.camera.screen_to_tile(pos)
@@ -580,6 +721,8 @@ class Game:
             self.hover_tile,
         )
         self._draw_top_hint()
+        if self.save_overlay.visible:
+            self.save_overlay.draw(self.screen)
         pygame.display.flip()
 
     def _draw_top_hint(self) -> None:
@@ -587,7 +730,7 @@ class Game:
         speed_label = SIM_SPEED_PRESETS[self._speed_index][0]
         text = (
             f"{TOOL_LABELS[self.active_tool]} tool | {VIEW_LABELS[self.view_mode]} view | "
-            f"Speed: {speed_label} [ / ] | V view | Q/E rotate | WASD pan | Scroll zoom | F5 save | F9 load | Esc menu"
+            f"Speed: {speed_label} [ / ] | V view | Q/E rotate | WASD pan | Scroll zoom | F5 save | F9 load | Esc"
         )
         rendered = font.render(text, True, COLORS["text"])
         bg = pygame.Rect(12, 12, rendered.get_width() + 18, rendered.get_height() + 10)

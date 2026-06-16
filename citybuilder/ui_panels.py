@@ -8,6 +8,7 @@ from .models import (
     BUILDING_LABELS,
     MENU_ORDER,
     MENU_TOOLS,
+    RECREATION_LABELS,
     TOOL_HOTKEYS,
     TOOL_LABELS,
     BuildingType,
@@ -308,6 +309,8 @@ class SidebarPanelRenderer:
             return "Power Line"
         if tile.has_water_pipe:
             return "Water Pipe"
+        if tile.zone == ZoneType.PARK:
+            return RECREATION_LABELS.get(tile.recreation_type, "Park")
         if tile.zone != ZoneType.EMPTY:
             prefix = "Dense " if tile.zone_level > 1 else ""
             return f"{prefix}{tile.zone.value.title()}"

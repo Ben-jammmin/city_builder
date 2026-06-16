@@ -42,7 +42,7 @@ class ImageAssetStore:
 
     def path_for(self, name: str) -> Path | None:
         relative = Path(f"{name}.png")
-        if relative.is_absolute() or ".." in relative.parts:
+        if relative.is_absolute() or relative.drive or ".." in relative.parts:
             return None
         return self.root / relative
 

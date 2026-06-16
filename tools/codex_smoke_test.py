@@ -29,7 +29,7 @@ from citybuilder.models import (
     ZoneType,
     menu_for_tool,
 )
-from citybuilder.save_load import load_game
+from citybuilder.save_load import list_saves, load_game, slot_path
 
 
 BUILD_TOOL_ORDER = [
@@ -274,10 +274,12 @@ def add_utility_debug_networks(game: Game, start: tuple[int, int]) -> None:
 
 
 def exercise_real_save_load() -> bool:
-    save_path = PROJECT_ROOT / "savegame.json"
-    if not save_path.exists():
+    saves = list_saves()
+    filled = [(i + 1, s) for i, s in enumerate(saves) if s is not None]
+    if not filled:
         return False
-    city_map, stats = load_game(save_path)
+    slot, _ = filled[0]
+    city_map, stats = load_game(slot_path(slot))
     require(city_map.width > 0 and city_map.height > 0, "Real save loaded with invalid map dimensions")
     require(stats.money is not None, "Real save loaded with invalid stats")
     return True
@@ -287,10 +289,9 @@ def main() -> None:
     args = parse_args()
     screenshot_dir = args.screenshots.resolve() if args.screenshots else None
     game: Game | None = None
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory() as _temp_dir:
         try:
             game = Game()
-            game.save_path = Path(temp_dir) / "codex-smoke-save.json"
             game.stats.money = 100000
 
             center = (game.map.width // 2, game.map.height // 2)
@@ -328,9 +329,9 @@ def main() -> None:
                 game.simulation.simulate_month()
             capture(game, screenshot_dir, "after_three_months")
 
-            game._save_game()
-            require(game.save_path.exists(), "Smoke save was not created")
-            game._load_game()
+            game._do_save(1)
+            require(slot_path(1).exists(), "Smoke save was not created")
+            game._do_load(1)
             require(game.map.get(*tool_positions[Tool.WATER_PIPE]).has_water_pipe, "Water pipe did not survive save/load")
             capture(game, screenshot_dir, "after_save_load")
 

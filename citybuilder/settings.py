@@ -260,7 +260,8 @@ POPULATION_MILESTONES: list[tuple[int, str, int]] = [
     (100_000, "Megalopolis",300_000),
 ]
 
-SAVE_FILE = "savegame.json"
+SAVE_DIR = "saves"
+NUM_SAVE_SLOTS = 5
 
 # Use the generated transparent isometric PNG pack for buildings, civic buildings,
 # and pedestrians. Terrain, roads, utilities, overlays, and zones remain procedural.
