@@ -33,7 +33,11 @@ from .models import (
     BuildingType, RecreationType, TerrainType, Tool, ViewMode, ZoneType,
 )
 from .pedestrian import PedestrianSystem
-from .settings import COLORS, DAY_CYCLE_SECONDS, HIGH_RISK_THRESHOLD, ROAD_TRAFFIC_CAPACITY, TILE_SIZE
+from .settings import (
+    COLORS, DAY_CYCLE_SECONDS, HIGH_RISK_THRESHOLD,
+    LAND_VALUE_MIN, LAND_VALUE_MAX,
+    ROAD_TRAFFIC_CAPACITY, TILE_SIZE,
+)
 from .sprites import SpriteAtlas, tile_variant
 
 # ── Minimap colour palette ─────────────────────────────────────────────────────
@@ -335,6 +339,9 @@ class Renderer:
             else:
                 # Show small warning icons for utility/risk problems.
                 self._draw_zone_status_iso(surface, cx, cy, tw, th, tile)
+            # Industrial smoke rises above developed factories.
+            if tile.zone == ZoneType.INDUSTRIAL and tile.development > 0.35:
+                self._draw_smoke(surface, cx, cy, tw, th, tile.development)
 
         # Power lines and water pipes are invisible in normal view.
         # Switch to Power or Water view (press V) to see the networks.
@@ -424,6 +431,56 @@ class Renderer:
             elif tile.building != BuildingType.NONE:
                 self._draw_marker_dot(surface, cx, cy, tw, th, tile.building)
 
+        elif view_mode == ViewMode.TRAFFIC:
+            if tile.has_road:
+                # Road tiles: green → yellow → red as load rises.
+                load = tile.traffic_load
+                frac = min(1.0, load / max(1, ROAD_TRAFFIC_CAPACITY * 2))
+                r = min(255, int(80 + 175 * frac))
+                g = min(255, int(220 * (1.0 - frac * 0.8)))
+                self._draw_diam_overlay(surface, cx, cy, tw, th, (r, g, 20, 200))
+            elif tile.zone not in (ZoneType.EMPTY, ZoneType.PARK):
+                # Dim non-road tiles so roads stand out.
+                self._draw_diam_overlay(surface, cx, cy, tw, th, (30, 30, 30, 100))
+            if tile.building != BuildingType.NONE:
+                self._draw_marker_dot(surface, cx, cy, tw, th, tile.building)
+
+        elif view_mode == ViewMode.LAND_VALUE:
+            if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK) or tile.building != BuildingType.NONE:
+                # Map land_value (LAND_VALUE_MIN..LAND_VALUE_MAX) to a cool-warm gradient.
+                lv = tile.land_value
+                lv_min, lv_max = LAND_VALUE_MIN, LAND_VALUE_MAX
+                frac = max(0.0, min(1.0, (lv - lv_min) / max(0.01, lv_max - lv_min)))
+                # Blue (low) → green (mid) → amber (high)
+                if frac < 0.5:
+                    t = frac * 2
+                    r, g, b = int(30 * t), int(100 + 120 * t), int(180 - 180 * t)
+                else:
+                    t = (frac - 0.5) * 2
+                    r, g, b = int(30 + 200 * t), int(220 - 80 * t), 0
+                self._draw_diam_overlay(surface, cx, cy, tw, th, (r, g, b, 180))
+            if tile.building != BuildingType.NONE:
+                self._draw_marker_dot(surface, cx, cy, tw, th, tile.building)
+
+        elif view_mode == ViewMode.POLLUTION:
+            if tile.pollution > 0.02:
+                # Grey-brown tint; opacity scales with pollution level.
+                frac = min(1.0, tile.pollution)
+                r = int(90 + 80 * frac)
+                g = int(70 - 20 * frac)
+                b = int(20)
+                alpha = int(40 + 200 * frac)
+                self._draw_diam_overlay(surface, cx, cy, tw, th, (r, g, b, alpha))
+            if tile.building == BuildingType.NONE and tile.zone == ZoneType.INDUSTRIAL:
+                # Show industrial source tiles clearly.
+                conn = _rotate_connections(city_map.road_connections(x, y), rotation) if tile.has_road else {}
+                if tile.has_road:
+                    self.sprites.draw_road(surface, cx, cy, tw, th, conn)
+            if tile.building != BuildingType.NONE:
+                self._draw_marker_dot(surface, cx, cy, tw, th, tile.building)
+            if tile.zone == ZoneType.INDUSTRIAL and tile.development > 0.35:
+                self._draw_smoke(surface, cx, cy, tw, th, tile.development)
+
     # ── Painter's algorithm tile iteration ────────────────────────────────────
 
     def _iter_painter_order(
@@ -465,6 +522,33 @@ class Renderer:
         self._diam_overlay.fill((0, 0, 0, 0))   # clear to transparent
         pygame.draw.polygon(self._diam_overlay, color, [(hw, 0), (tw, hh), (hw, th), (0, hh)])
         surface.blit(self._diam_overlay, (cx - hw, cy))
+
+    def _draw_smoke(
+        self,
+        surface: pygame.Surface,
+        cx: int, cy: int,
+        tw: int, th: int,
+        development: float,
+    ) -> None:
+        """Draws animated smoke puffs rising above industrial buildings."""
+        if tw < 10:
+            return
+        tick   = pygame.time.get_ticks()
+        n_puffs = 1 + int(development * 2)  # 1-3 puffs depending on development
+        for i in range(n_puffs):
+            phase  = (tick // 600 + i * 200) % 1000
+            rise   = phase / 1000.0          # 0→1 as puff rises
+            alpha  = int(120 * (1.0 - rise) * min(1.0, development))
+            if alpha < 8:
+                continue
+            r      = max(2, int(tw / 6 * (0.5 + rise * 0.8)))
+            offset_x = (i - n_puffs // 2) * max(2, tw // 8)
+            px     = cx + offset_x
+            py     = cy - int(rise * th * 1.8) - th // 4
+            grey   = int(140 + 60 * rise)
+            smoke  = pygame.Surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(smoke, (grey, grey, grey, alpha), (r + 1, r + 1), r)
+            surface.blit(smoke, (px - r - 1, py - r - 1))
 
     def _draw_marker_dot(
         self,

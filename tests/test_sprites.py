@@ -59,8 +59,21 @@ class SpriteMathTests(unittest.TestCase):
     def test_asset_store_rejects_absolute_and_parent_paths(self) -> None:
         store = ImageAssetStore("assets")
 
+        # Parent traversal
         self.assertIsNone(store.path_for("../outside"))
+        self.assertIsNone(store.path_for("sub/../../outside"))
+
+        # Unix absolute path — on Windows, Path("/…").is_absolute() is False but .root is set
+        self.assertIsNone(store.path_for("/etc/passwd"))
+
+        # Windows absolute paths (forward-slash and backslash variants)
         self.assertIsNone(store.path_for("C:/outside"))
+        self.assertIsNone(store.path_for("C:\\outside"))
+
+        # Windows drive-relative root path — no drive letter but root is set
+        self.assertIsNone(store.path_for("\\outside"))
+
+        # Valid relative paths should still resolve correctly
         self.assertEqual(store.path_for("terrain/grass_0").as_posix(), "assets/terrain/grass_0.png")
 
     def test_asset_store_preserves_sprite_aspect_ratio_when_scaling(self) -> None:

@@ -119,20 +119,29 @@ RECREATION_DEMAND_COM = {
 # Zone density levels (level 1 = standard, level 2 = dense)
 ZONE_LEVEL_COST_MULTIPLIERS = {
     1: 1.0,
-    2: 3.0,   # dense zones cost 3× as much to place
+    2: 3.0,    # dense zones cost 3× as much to place
+    3: 9.0,    # highrise zones cost 9× as much to place
 }
 ZONE_LEVEL_CAPACITY_MULTIPLIERS = {
     1: 1.0,
-    2: 2.35,  # dense zones hold 2.35× more residents/jobs
+    2: 2.35,   # dense zones hold 2.35× more residents/jobs
+    3: 4.8,    # highrise zones hold 4.8× more
 }
 ZONE_LEVEL_GROWTH_MULTIPLIERS = {
     1: 1.0,
-    2: 0.85,  # dense zones grow slower but hold more people
+    2: 0.85,   # dense zones grow slower but hold more people
+    3: 0.55,   # highrise zones grow very slowly
 }
 ZONE_LEVEL_LABELS = {
     1: "Standard",
     2: "Dense",
+    3: "Highrise",
 }
+
+# Highrise zones require this land value to be upgradeable and to grow.
+HIGHRISE_MIN_LAND_VALUE  = 1.05
+# Highrise zones also require this minimum development on the existing dense tile.
+HIGHRISE_MIN_DEVELOPMENT = 0.45
 
 # ── Infrastructure costs ───────────────────────────────────────────────────────
 ROAD_COST = 60
@@ -312,10 +321,127 @@ FIRE_SUPPRESS_TIME      = 4.5    # real sec to extinguish with fire station cove
 FIRE_NATURAL_EXTINGUISH = 18.0   # real sec until fire burns out on its own
 FIRE_EMERGENCY_COST     = 250    # money charged when a fire breaks out
 
+# ── Pollution ──────────────────────────────────────────────────────────────────
+# Industrial zones generate pollution that spreads to adjacent tiles.
+POLLUTION_INDUSTRIAL_SOURCE = 0.8   # base pollution at an industrial tile (0-1)
+POLLUTION_ROAD_SOURCE       = 0.15  # roads add a small amount of pollution
+POLLUTION_SPREAD_FACTOR     = 0.4   # each neighbor receives this fraction of the source
+POLLUTION_DECAY             = 0.25  # per-tick decay toward 0 for non-source tiles
+# Pollution above this level suppresses residential growth and land value.
+POLLUTION_PENALTY_THRESHOLD = 0.3
+# Maximum land-value penalty applied at max pollution.
+POLLUTION_LAND_VALUE_PENALTY = 0.3
+
 # ── Crime incident ─────────────────────────────────────────────────────────────
 CRIME_INCIDENT_PROB     = 0.012  # per uncovered high-crime tile per month
 CRIME_DAMAGE_RATE       = 0.10   # development set back on incident tile
 CRIME_CLEANUP_COST      = 100    # money charged per crime incident
+
+# ── City events ───────────────────────────────────────────────────────────────
+# Random monthly events that add narrative variety.  Each entry is a dict:
+#   id          — unique string key (also used for deduplication)
+#   message     — shown in the advisor feed, prefixed with "★ "
+#   prob        — probability of firing in any given month (independent rolls)
+#   min_pop     — city population required before this event can fire
+#   duration    — how many months the effect lasts (0 = instant money/penalty)
+#   effects     — dict of modifier keys → values applied while the event is active:
+#                   res_demand, com_demand, ind_demand  — flat additions to demand (0-100)
+#                   money                              — one-time payment (negative = penalty)
+#                   growth_mult                        — multiplier on all zone growth rates
+CITY_EVENTS: list[dict] = [
+    # ── Good events ──────────────────────────────────────────────────────────
+    {
+        "id": "tech_boom",
+        "message": "A major tech company chose your city for its new headquarters! Commercial demand surges.",
+        "prob": 0.018, "min_pop": 800, "duration": 4,
+        "effects": {"com_demand": 22, "res_demand": 10},
+    },
+    {
+        "id": "state_grant",
+        "message": "The state awarded your city an infrastructure grant.",
+        "prob": 0.025, "min_pop": 200, "duration": 0,
+        "effects": {"money": 4000},
+    },
+    {
+        "id": "tourism_award",
+        "message": "Travel magazine named your city a top destination! Tourism boosts commercial income.",
+        "prob": 0.016, "min_pop": 1500, "duration": 3,
+        "effects": {"com_demand": 15, "res_demand": 5},
+    },
+    {
+        "id": "factory_expansion",
+        "message": "Regional factories are expanding operations. Industrial demand rises.",
+        "prob": 0.020, "min_pop": 300, "duration": 3,
+        "effects": {"ind_demand": 20, "res_demand": 8},
+    },
+    {
+        "id": "housing_boom",
+        "message": "Low interest rates sparked a housing boom. Residential growth accelerates.",
+        "prob": 0.022, "min_pop": 100, "duration": 3,
+        "effects": {"res_demand": 20, "growth_mult": 1.25},
+    },
+    {
+        "id": "sports_team",
+        "message": "The city's sports team made the playoffs! Morale is high.",
+        "prob": 0.014, "min_pop": 2000, "duration": 2,
+        "effects": {"res_demand": 12, "com_demand": 8},
+    },
+    {
+        "id": "federal_stimulus",
+        "message": "Federal economic stimulus package benefits your region.",
+        "prob": 0.012, "min_pop": 500, "duration": 0,
+        "effects": {"money": 8000},
+    },
+    {
+        "id": "university_opens",
+        "message": "A new university branch opens nearby, attracting educated residents.",
+        "prob": 0.010, "min_pop": 3000, "duration": 6,
+        "effects": {"res_demand": 14, "com_demand": 10, "growth_mult": 1.15},
+    },
+    # ── Bad events ──────────────────────────────────────────────────────────
+    {
+        "id": "recession",
+        "message": "Economic recession is dampening growth across the region.",
+        "prob": 0.015, "min_pop": 500, "duration": 4,
+        "effects": {"res_demand": -15, "com_demand": -20, "ind_demand": -10},
+    },
+    {
+        "id": "factory_closure",
+        "message": "A major factory closed, leaving many workers unemployed.",
+        "prob": 0.014, "min_pop": 600, "duration": 3,
+        "effects": {"ind_demand": -18, "res_demand": -8},
+    },
+    {
+        "id": "infrastructure_fine",
+        "message": "City infrastructure inspection resulted in an emergency repair bill.",
+        "prob": 0.018, "min_pop": 300, "duration": 0,
+        "effects": {"money": -2500},
+    },
+    {
+        "id": "crime_wave",
+        "message": "A crime wave is unsettling residents. Police resources stretched thin.",
+        "prob": 0.016, "min_pop": 800, "duration": 3,
+        "effects": {"res_demand": -12, "com_demand": -8},
+    },
+    {
+        "id": "drought",
+        "message": "Drought conditions are straining the water supply.",
+        "prob": 0.013, "min_pop": 200, "duration": 3,
+        "effects": {"growth_mult": 0.75, "res_demand": -8},
+    },
+    {
+        "id": "heatwave",
+        "message": "Extreme heat wave strained the power grid and slowed construction.",
+        "prob": 0.015, "min_pop": 100, "duration": 2,
+        "effects": {"growth_mult": 0.80, "com_demand": -6},
+    },
+    {
+        "id": "pollution_scandal",
+        "message": "Industrial pollution scandal drove away residents.",
+        "prob": 0.012, "min_pop": 1000, "duration": 3,
+        "effects": {"res_demand": -18, "com_demand": -6},
+    },
+]
 
 # ── City milestones ────────────────────────────────────────────────────────────
 # When the city reaches each population threshold the player earns a title

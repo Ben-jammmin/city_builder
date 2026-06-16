@@ -165,6 +165,7 @@ def tile_to_data(tile: Tile) -> dict[str, Any]:
         "land_value": tile.land_value,
         "fire_risk": tile.fire_risk,
         "crime_risk": tile.crime_risk,
+        "pollution": tile.pollution,
         "on_fire": tile.on_fire,
         "fire_burn_time": tile.fire_burn_time,
     }
@@ -190,6 +191,7 @@ def tile_from_data(data: dict[str, Any]) -> Tile:
         land_value=data.get("land_value", 1.0),
         fire_risk=data.get("fire_risk", 0),
         crime_risk=data.get("crime_risk", 0),
+        pollution=data.get("pollution", 0.0),
         on_fire=data.get("on_fire", False),
         fire_burn_time=data.get("fire_burn_time", 0.0),
     )
@@ -241,6 +243,7 @@ def stats_to_data(stats: CityStats) -> dict[str, Any]:
         "exp_recreation": stats.exp_recreation,
         "messages": stats.messages,
         "budget_history": stats.budget_history,
+        "active_events": stats.active_events,
     }
 
 
@@ -288,4 +291,5 @@ def stats_from_data(data: dict[str, Any]) -> CityStats:
         exp_recreation=data.get("exp_recreation", 0),
         messages=data.get("messages", ["Loaded city."]),
         budget_history=data.get("budget_history", []),
+        active_events=data.get("active_events", []),
     )

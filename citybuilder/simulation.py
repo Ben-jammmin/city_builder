@@ -119,6 +119,14 @@ from .settings import (
     CRIME_INCIDENT_PROB,
     CRIME_DAMAGE_RATE,
     CRIME_CLEANUP_COST,
+    HIGHRISE_MIN_LAND_VALUE,
+    CITY_EVENTS,
+    POLLUTION_INDUSTRIAL_SOURCE,
+    POLLUTION_ROAD_SOURCE,
+    POLLUTION_SPREAD_FACTOR,
+    POLLUTION_DECAY,
+    POLLUTION_PENALTY_THRESHOLD,
+    POLLUTION_LAND_VALUE_PENALTY,
     POPULATION_MILESTONES,
     ROAD_TRAFFIC_CAPACITY,
 )
@@ -257,6 +265,8 @@ class Simulation:
         self.stats.budget_history = self.stats.budget_history[-12:]
         self.stats.advance_month()
         self._update_traffic()
+        self._update_pollution()
+        self._check_city_events()
         self._check_fire_ignition()
         self._check_crime_incidents()
         self._check_milestones()
@@ -278,7 +288,10 @@ class Simulation:
             connected = self.city_map.has_adjacent_road(x, y)
             tile.land_value = self._land_value_for(x, y)
 
-            if connected and tile.powered and tile.watered:
+            # Highrise zones need strong land value to sustain growth.
+            highrise_blocked = tile.zone_level >= 3 and tile.land_value < HIGHRISE_MIN_LAND_VALUE
+
+            if connected and tile.powered and tile.watered and not highrise_blocked:
                 # Zone can grow: base rate × demand × land value × utility capacity.
                 growth = (
                     self._growth_for(tile.zone)
@@ -291,8 +304,14 @@ class Simulation:
                     growth *= (1.0 + EDUCATION_GROWTH_BONUS)
                 if tile.health_coverage:
                     growth *= (1.0 + HEALTH_GROWTH_BONUS)
+                # Active event growth multipliers.
+                for ev in self.stats.active_events:
+                    growth *= ev.get("effects", {}).get("growth_mult", 1.0)
                 # Clamp development at 1.0 (fully built-up).
                 tile.development = min(1.0, tile.development + growth)
+            elif highrise_blocked:
+                # Highrise without enough land value stagnates (no growth, no shrink).
+                pass
             else:
                 # Missing road, power, or water — zone slowly shrinks.
                 tile.development = max(0.0, tile.development - DEVELOPMENT_DECLINE_RATE)
@@ -342,6 +361,9 @@ class Simulation:
                 value += RECREATION_LAND_VALUE.get(neighbor.recreation_type.value, PARK_LAND_VALUE_BONUS)
             elif neighbor.has_road:
                 value += ROAD_NEIGHBOR_BONUS
+        if tile.pollution > POLLUTION_PENALTY_THRESHOLD:
+            excess = tile.pollution - POLLUTION_PENALTY_THRESHOLD
+            value -= excess * POLLUTION_LAND_VALUE_PENALTY / (1.0 - POLLUTION_PENALTY_THRESHOLD)
         return max(LAND_VALUE_MIN, min(LAND_VALUE_MAX, value))
 
     def _apply_capacity(self, tile: Tile) -> None:
@@ -604,6 +626,98 @@ class Simulation:
                     nt = self.city_map.get(nx, ny)
                     nt.traffic_load = min(99, nt.traffic_load + per_road)
 
+    # ── Pollution simulation ───────────────────────────────────────────────────
+
+    def _update_pollution(self) -> None:
+        """
+        Spreads pollution from industrial zones and roads to their neighbors.
+
+        Industrial tiles are primary sources; roads contribute a smaller amount.
+        Pollution decays each month on non-source tiles, so it trails off with
+        distance.  The result is stored in tile.pollution (0.0–1.0).
+        """
+        W = self.city_map.width
+        H = self.city_map.height
+        raw: list[list[float]] = [[0.0] * H for _ in range(W)]
+
+        # Seed pollution at source tiles.
+        for x, y, tile in self.city_map.iter_tiles():
+            if tile.zone == ZoneType.INDUSTRIAL and tile.development > 0.05:
+                raw[x][y] += POLLUTION_INDUSTRIAL_SOURCE * tile.development
+            if tile.has_road:
+                raw[x][y] += POLLUTION_ROAD_SOURCE
+
+        # One-pass spread: each source tile contributes to its 4 neighbors.
+        spread: list[list[float]] = [[0.0] * H for _ in range(W)]
+        for x in range(W):
+            for y in range(H):
+                v = raw[x][y]
+                if v < 0.01:
+                    continue
+                spread[x][y] += v
+                contrib = v * POLLUTION_SPREAD_FACTOR
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if 0 <= nx < W and 0 <= ny < H:
+                        spread[nx][ny] += contrib
+
+        # Apply decay and clamp; write back.
+        for x, y, tile in self.city_map.iter_tiles():
+            new_val = spread[x][y]
+            if new_val < 0.01:
+                new_val = max(0.0, tile.pollution - POLLUTION_DECAY)
+            tile.pollution = min(1.0, new_val)
+
+    # ── City events ────────────────────────────────────────────────────────────
+
+    def _check_city_events(self) -> None:
+        """
+        Rolls for new random city events and ticks down existing ones.
+
+        Events that are currently active cannot fire again (dedup by id).
+        Instant events (duration=0) apply their money effect immediately and
+        are never stored in active_events.
+        """
+        active_ids = {ev["id"] for ev in self.stats.active_events}
+
+        for ev_def in CITY_EVENTS:
+            if ev_def["id"] in active_ids:
+                continue
+            if self.stats.population < ev_def["min_pop"]:
+                continue
+            if random.random() >= ev_def["prob"]:
+                continue
+
+            fx = ev_def.get("effects", {})
+            money_delta = fx.get("money", 0)
+            if money_delta:
+                self.stats.money += money_delta
+
+            msg = f"★ {ev_def['message']}"
+            if money_delta > 0:
+                msg += f" (+${money_delta:,})"
+            elif money_delta < 0:
+                msg += f" (-${abs(money_delta):,})"
+            timestamped = f"Y{self.stats.year} M{self.stats.month}: {msg}"
+            self.stats.add_message(timestamped)
+
+            if ev_def["duration"] > 0:
+                self.stats.active_events.append({
+                    **ev_def,
+                    "remaining": ev_def["duration"],
+                })
+                active_ids.add(ev_def["id"])
+
+        # Tick down durations; remove expired events.
+        still_active = []
+        for ev in self.stats.active_events:
+            ev["remaining"] -= 1
+            if ev["remaining"] > 0:
+                still_active.append(ev)
+            else:
+                timestamped = f"Y{self.stats.year} M{self.stats.month}: ★ Event ended: {ev['id'].replace('_', ' ').title()}."
+                self.stats.add_message(timestamped)
+        self.stats.active_events = still_active
+
     # ── Demand calculation ─────────────────────────────────────────────────────
 
     def _update_demand(self) -> None:
@@ -639,6 +753,14 @@ class Simulation:
         )
         congestion_penalty = min(25, congested * CONGESTION_DEMAND_PENALTY)
 
+        # Aggregate active-event demand modifiers.
+        ev_res = ev_com = ev_ind = 0
+        for ev in self.stats.active_events:
+            fx = ev.get("effects", {})
+            ev_res += fx.get("res_demand", 0)
+            ev_com += fx.get("com_demand", 0)
+            ev_ind += fx.get("ind_demand", 0)
+
         # Residential: more jobs → people want to move in; high population satisfies demand.
         self.stats.demand_residential = self._clamp_percent(
             45
@@ -649,6 +771,7 @@ class Simulation:
             - res_tax_penalty
             + transport_bonus * 0.3
             + rec_res_bonus * 0.4
+            + ev_res
         )
         # Commercial: more people → more customers; congestion hurts shoppers.
         self.stats.demand_commercial = self._clamp_percent(
@@ -660,6 +783,7 @@ class Simulation:
             + transport_bonus
             + rec_com_bonus * 0.5
             - congestion_penalty
+            + ev_com
         )
         # Industrial: needs workers (population) and utility supply.
         self.stats.demand_industrial = self._clamp_percent(
@@ -669,6 +793,7 @@ class Simulation:
             + utility_bonus
             - ind_tax_penalty
             + transport_bonus * 0.7
+            + ev_ind
         )
 
     # ── System totals ──────────────────────────────────────────────────────────

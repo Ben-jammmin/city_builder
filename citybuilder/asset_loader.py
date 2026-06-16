@@ -68,7 +68,7 @@ class ImageAssetStore:
         is unsafe (absolute paths or directory traversal are rejected).
         """
         relative = Path(f"{name}.png")
-        if relative.is_absolute() or relative.drive or ".." in relative.parts:
+        if relative.is_absolute() or relative.drive or relative.root or ".." in relative.parts:
             return None
         return self.root / relative
 

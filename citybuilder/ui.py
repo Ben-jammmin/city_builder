@@ -259,11 +259,14 @@ class Sidebar:
         kind   = self._tile_kind(tile)
         self.panels._draw_text(surface, fit_label(f"{tx},{ty} {kind}", self.font_small, width - 20),
                                panel.x + 10, panel.y + 32, self.font_small)
-        # Development % and land value.
+        # Development %, land value, pollution.
+        pol_pct = int(tile.pollution * 100)
+        pol_col = COLORS["money_bad"] if pol_pct > 30 else COLORS["muted_text"]
         self.panels._draw_text(
             surface,
-            fit_label(f"Dev {tile.development:.0%}  Val {tile.land_value:.2f}", self.font_small, width - 20),
-            panel.x + 10, panel.y + 50, self.font_small, COLORS["muted_text"],
+            fit_label(f"Dev {tile.development:.0%}  Val {tile.land_value:.2f}  Pol {pol_pct}%",
+                      self.font_small, width - 20),
+            panel.x + 10, panel.y + 50, self.font_small, pol_col if pol_pct > 30 else COLORS["muted_text"],
         )
         # Residents, jobs, and risk values.
         self.panels._draw_text(
@@ -286,7 +289,10 @@ class Sidebar:
         self.panels._draw_text(surface, "Advisor", panel.x + 10, panel.y + 8, self.font)
         line_y = panel.y + 34
         for message in stats.messages[-2:]:
-            self.panels._draw_wrapped_text(surface, message, panel.x + 10, line_y, width - 20)
+            is_event = "★" in message
+            self.panels._draw_wrapped_text(surface, message, panel.x + 10, line_y, width - 20,
+                                           color=COLORS["money_good"] if is_event and "ended" not in message
+                                           else (COLORS["muted_text"] if not is_event else COLORS["muted_text"]))
             line_y += 34
             if line_y > panel.bottom - 18:
                 break

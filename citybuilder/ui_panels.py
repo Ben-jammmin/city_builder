@@ -31,7 +31,10 @@ from .models import (
     Tool,
     ZoneType,
 )
-from .settings import COLORS, HIGH_RISK_THRESHOLD, MAX_TAX_RATE, MIN_TAX_RATE, POPULATION_MILESTONES, ROAD_TRAFFIC_CAPACITY
+from .settings import (
+    COLORS, HIGH_RISK_THRESHOLD, HIGHRISE_MIN_LAND_VALUE,
+    MAX_TAX_RATE, MIN_TAX_RATE, POPULATION_MILESTONES, ROAD_TRAFFIC_CAPACITY,
+)
 
 # ── Layout constants ───────────────────────────────────────────────────────────
 PANEL_GAP = 6    # vertical gap between stacked panels
@@ -361,6 +364,8 @@ class SidebarPanelRenderer:
             return "Needs power to grow", COLORS["money_bad"]
         if not tile.watered:
             return "Needs water to grow", COLORS["money_bad"]
+        if tile.zone_level >= 3 and tile.land_value < HIGHRISE_MIN_LAND_VALUE:
+            return f"Highrise stalled (need val {HIGHRISE_MIN_LAND_VALUE:.2f})", COLORS["money_bad"]
         if tile.development >= 0.95:
             return "Fully developed", COLORS["money_good"]
         return "Growing...", COLORS["money_good"]
@@ -531,8 +536,10 @@ class SidebarPanelRenderer:
         rendered = font.render(text, True, color or COLORS["text"])
         surface.blit(rendered, (x, y))
 
-    def _draw_wrapped_text(self, surface: pygame.Surface, text: str, x: int, y: int, max_width: int) -> None:
+    def _draw_wrapped_text(self, surface: pygame.Surface, text: str, x: int, y: int, max_width: int,
+                           color: tuple | None = None) -> None:
         """Word-wraps text into up to 2 lines, each spaced 17 px apart."""
+        col = color if color is not None else COLORS["muted_text"]
         words = text.split()
         lines: list[str] = []
         line = ""
@@ -547,4 +554,4 @@ class SidebarPanelRenderer:
         if line:
             lines.append(line)
         for offset, line_text in enumerate(lines[:2]):
-            self._draw_text(surface, line_text, x, y + offset * 17, self.sidebar.font_small, COLORS["muted_text"])
+            self._draw_text(surface, line_text, x, y + offset * 17, self.sidebar.font_small, col)

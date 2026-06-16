@@ -14,7 +14,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS, BuildingType, RecreationType, TerrainType, Tile, ZoneType
-from .settings import RECREATION_MAINTENANCE, RECREATION_DEMAND_RES, RECREATION_DEMAND_COM
+from .settings import (
+    HIGHRISE_MIN_DEVELOPMENT, HIGHRISE_MIN_LAND_VALUE,
+    RECREATION_MAINTENANCE, RECREATION_DEMAND_RES, RECREATION_DEMAND_COM,
+)
 
 
 class CityMap:
@@ -97,6 +100,15 @@ class CityMap:
         # Can't zone a tile that already has a road, power line, pipe, or building.
         if tile.has_road or tile.has_power_line or tile.has_water_pipe or tile.building != BuildingType.NONE:
             return False
+        # Highrise (level 3) is an upgrade path: tile must already be level-2 same zone
+        # with enough development and a healthy land value.
+        if level >= 3:
+            if tile.zone != zone or tile.zone_level < 2:
+                return False
+            if tile.development < HIGHRISE_MIN_DEVELOPMENT:
+                return False
+            if tile.land_value < HIGHRISE_MIN_LAND_VALUE:
+                return False
         # Allow re-zoning to a different type, level, or recreation sub-type.
         if tile.zone != zone or tile.zone_level != level:
             return True
