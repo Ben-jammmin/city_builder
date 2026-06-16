@@ -1,4 +1,17 @@
-"""Save and load the game state to/from a JSON file on disk."""
+"""
+save_load.py — Saves and loads the game state to/from JSON files on disk.
+
+Save format
+-----------
+Each save is a plain JSON file at  saves/slot_N.json  (N = 1-5).
+The top-level object has three keys:
+  "version" : integer schema version (checked on load)
+  "map"     : {width, height, tiles[x][y][...]} — the full city grid
+  "stats"   : flat dict of all CityStats fields
+
+Slot metadata (year, population, money) can be read without loading the
+full map — used by the save/load overlay to show a summary of each slot.
+"""
 from __future__ import annotations
 
 import json
@@ -9,20 +22,32 @@ from .city_map import CityMap
 from .models import BuildingType, CityStats, RecreationType, TerrainType, Tile, ZoneType
 from .settings import NUM_SAVE_SLOTS, SAVE_DIR
 
+# Increment this whenever the save format changes in a way that breaks
+# backwards compatibility.  A mismatch on load emits a UserWarning.
 SAVE_VERSION = 4
 
 
+# ── Path helpers ───────────────────────────────────────────────────────────────
+
 def _saves_dir() -> Path:
+    """Returns the absolute path to the saves/ directory (next to the project root)."""
     return Path(__file__).resolve().parent.parent / SAVE_DIR
 
 
 def slot_path(slot: int) -> Path:
+    """Returns the file path for a given save slot, creating the folder if needed."""
     d = _saves_dir()
     d.mkdir(exist_ok=True)
     return d / f"slot_{slot}.json"
 
 
+# ── Slot metadata (lightweight preview for the overlay) ───────────────────────
+
 def slot_metadata(slot: int) -> dict | None:
+    """
+    Reads just the stats block of a save file to get a quick summary.
+    Returns None if the slot is empty or the file is unreadable.
+    """
     p = _saves_dir() / f"slot_{slot}.json"
     if not p.exists():
         return None
@@ -43,40 +68,50 @@ def slot_metadata(slot: int) -> dict | None:
 
 
 def list_saves() -> list[dict | None]:
+    """Returns a list of metadata dicts (or None for empty slots) for all save slots."""
     return [slot_metadata(i) for i in range(1, NUM_SAVE_SLOTS + 1)]
 
 
 def most_recent_slot() -> int | None:
+    """Returns the slot number of the most-recently modified save, or None if no saves exist."""
     saves_dir = _saves_dir()
     best_slot: int | None = None
     best_mtime = 0.0
     for slot in range(1, NUM_SAVE_SLOTS + 1):
         p = saves_dir / f"slot_{slot}.json"
         if p.exists():
-            mtime = p.stat().st_mtime
+            mtime = p.stat().st_mtime    # file modification time in seconds
             if mtime > best_mtime:
                 best_mtime = mtime
                 best_slot = slot
     return best_slot
 
 
+# ── High-level save / load ─────────────────────────────────────────────────────
+
 def save_game(city_map: CityMap, stats: CityStats, path: str | Path) -> None:
+    """Serialises the full game state and writes it to path as pretty-printed JSON."""
     save_path = Path(path)
     save_path.write_text(json.dumps(to_save_data(city_map, stats), indent=2), encoding="utf-8")
 
 
 def load_game(path: str | Path) -> tuple[CityMap, CityStats]:
+    """Reads a JSON save file and returns a restored (CityMap, CityStats) pair."""
     save_path = Path(path)
     data = json.loads(save_path.read_text(encoding="utf-8"))
     return from_save_data(data)
 
 
+# ── Serialisation ──────────────────────────────────────────────────────────────
+
 def to_save_data(city_map: CityMap, stats: CityStats) -> dict[str, Any]:
+    """Converts a live game state into a JSON-serialisable dict."""
     return {
         "version": SAVE_VERSION,
         "map": {
             "width": city_map.width,
             "height": city_map.height,
+            # 2-D list: outer index is x, inner is y.
             "tiles": [
                 [tile_to_data(city_map.get(x, y)) for y in range(city_map.height)]
                 for x in range(city_map.width)
@@ -87,6 +122,7 @@ def to_save_data(city_map: CityMap, stats: CityStats) -> dict[str, Any]:
 
 
 def from_save_data(data: dict[str, Any]) -> tuple[CityMap, CityStats]:
+    """Reconstructs a (CityMap, CityStats) pair from a save dict."""
     file_version = data.get("version", 0)
     if file_version != SAVE_VERSION:
         import warnings
@@ -101,6 +137,7 @@ def from_save_data(data: dict[str, Any]) -> tuple[CityMap, CityStats]:
     city_map = CityMap(map_data["width"], map_data["height"])
     tiles = map_data["tiles"]
 
+    # Restore every tile from its serialised form.
     for x in range(city_map.width):
         for y in range(city_map.height):
             city_map.tiles[x][y] = tile_from_data(tiles[x][y])
@@ -109,7 +146,10 @@ def from_save_data(data: dict[str, Any]) -> tuple[CityMap, CityStats]:
     return city_map, stats
 
 
+# ── Tile serialisation ─────────────────────────────────────────────────────────
+
 def tile_to_data(tile: Tile) -> dict[str, Any]:
+    """Converts a single Tile to a JSON-safe dict. Enums are stored as their string value."""
     return {
         "terrain": tile.terrain.value,
         "zone": tile.zone.value,
@@ -126,10 +166,15 @@ def tile_to_data(tile: Tile) -> dict[str, Any]:
         "fire_risk": tile.fire_risk,
         "crime_risk": tile.crime_risk,
         "on_fire": tile.on_fire,
+        "fire_burn_time": tile.fire_burn_time,
     }
 
 
 def tile_from_data(data: dict[str, Any]) -> Tile:
+    """
+    Reconstructs a Tile from a save dict.
+    Uses .get() with defaults so old saves can load into newer game versions.
+    """
     return Tile(
         terrain=TerrainType(data.get("terrain", TerrainType.GRASS.value)),
         zone=ZoneType(data.get("zone", ZoneType.EMPTY.value)),
@@ -146,10 +191,14 @@ def tile_from_data(data: dict[str, Any]) -> Tile:
         fire_risk=data.get("fire_risk", 0),
         crime_risk=data.get("crime_risk", 0),
         on_fire=data.get("on_fire", False),
+        fire_burn_time=data.get("fire_burn_time", 0.0),
     )
 
 
+# ── CityStats serialisation ────────────────────────────────────────────────────
+
 def stats_to_data(stats: CityStats) -> dict[str, Any]:
+    """Converts a CityStats object to a flat JSON-safe dict."""
     return {
         "money": stats.money,
         "population": stats.population,
@@ -195,6 +244,7 @@ def stats_to_data(stats: CityStats) -> dict[str, Any]:
 
 
 def stats_from_data(data: dict[str, Any]) -> CityStats:
+    """Reconstructs a CityStats from a save dict, using sensible defaults for missing fields."""
     return CityStats(
         money=data.get("money", 0),
         population=data.get("population", 0),

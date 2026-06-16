@@ -1,4 +1,21 @@
-"""Main menu system — shown before and after the game."""
+"""
+menu.py — Main menu system shown before and after each game session.
+
+Screen flow
+-----------
+  run_main_menu()            — public entry point; returns a GameConfig or None
+    └─ _MainMenuScreen       — title screen with New Game / Load / Settings / Quit
+         ├─ _NewGameScreen   — map size, difficulty, terrain, seed, speed options
+         └─ _SettingsScreen  — keybind and save-slot reference card
+
+Helper widgets
+--------------
+  _Button     — clickable rounded rectangle with hover highlighting
+  _OptionRow  — a row of mutually-exclusive _Button options (radio buttons)
+  _TextInput  — single-line digit input for the terrain seed field
+
+All colours match the in-game dark sidebar palette so the menu feels consistent.
+"""
 from __future__ import annotations
 
 import random
@@ -28,6 +45,7 @@ _font_cache: dict[tuple[int, bool], pygame.font.Font] = {}
 
 
 def _font(size: int, bold: bool = False) -> pygame.font.Font:
+    """Returns a cached SysFont so repeated calls don't re-create identical font objects."""
     key = (size, bold)
     if key not in _font_cache:
         _font_cache[key] = pygame.font.SysFont("Segoe UI", size, bold=bold)
@@ -36,29 +54,36 @@ def _font(size: int, bold: bool = False) -> pygame.font.Font:
 
 # ── Drawing helpers ───────────────────────────────────────────────────────────
 def _rrect(surf: pygame.Surface, color: tuple, rect: pygame.Rect, r: int = 6) -> None:
+    """Draws a filled rounded rectangle."""
     pygame.draw.rect(surf, color, rect, border_radius=r)
 
 
 def _rrect_border(surf: pygame.Surface, color: tuple, rect: pygame.Rect,
                   w: int = 2, r: int = 6) -> None:
+    """Draws a rounded rectangle outline (border only, no fill)."""
     pygame.draw.rect(surf, color, rect, w, border_radius=r)
 
 
 def _blit_text(surf: pygame.Surface, msg: str, font: pygame.font.Font,
                color: tuple, **anchor) -> None:
+    """Renders text and blits it using pygame.Rect keyword anchors (e.g. center=, topleft=)."""
     rendered = font.render(str(msg), True, color)
     surf.blit(rendered, rendered.get_rect(**anchor))
 
 
 # ── Background ────────────────────────────────────────────────────────────────
 def _draw_bg(surface: pygame.Surface) -> None:
-    """Solid fill with a faint isometric line grid for atmosphere."""
+    """Solid fill with a faint isometric line grid for atmosphere.
+
+    Two families of diagonal lines at +0.5 and -0.5 gradient are drawn
+    over the dark background to suggest the isometric tile grid.
+    """
     surface.fill(_BG)
     w, h = surface.get_size()
     col = (20, 26, 34)
-    step = 68  # spacing between parallel lines along y-axis
+    step = 68  # pixel spacing between parallel grid lines
 
-    # "/" diagonals (slope = +0.5)
+    # "/" diagonals (slope = +0.5, i.e. one pixel up for every two right)
     for b in range(-h, w // 2 + h + step, step):
         x1, y1 = 0, b
         x2, y2 = w, b + w // 2
@@ -73,6 +98,8 @@ def _draw_bg(surface: pygame.Surface) -> None:
 
 # ── Button ────────────────────────────────────────────────────────────────────
 class _Button:
+    """A clickable rounded rectangle with hover and active states."""
+
     def __init__(self, rect: pygame.Rect, label: str) -> None:
         self.rect = pygame.Rect(rect)
         self.label = label
@@ -80,6 +107,7 @@ class _Button:
 
     def draw(self, surf: pygame.Surface, active: bool = False,
              disabled: bool = False, fsize: int = 16) -> None:
+        """Draws the button with colour-coded state (normal / hovered / active / disabled)."""
         if disabled:
             bg, tc = _DIVIDER, _MUTED
         elif active:
@@ -90,34 +118,40 @@ class _Button:
             bg, tc = _BTN, _TEXT
         _rrect(surf, bg, self.rect)
         if active and not disabled:
+            # Blue border marks the selected option.
             _rrect_border(surf, _ACCENT, self.rect)
         _blit_text(surf, self.label, _font(fsize), tc, center=self.rect.center)
 
     def hit(self, pos: tuple[int, int]) -> bool:
+        """Returns True if the mouse position falls inside this button."""
         return self.rect.collidepoint(pos)
 
     def update_hover(self, pos: tuple[int, int]) -> None:
+        """Updates the hover state based on current mouse position."""
         self.hovered = self.rect.collidepoint(pos)
 
 
 # ── OptionRow ─────────────────────────────────────────────────────────────────
 class _OptionRow:
-    """A horizontal strip of mutually-exclusive option buttons."""
+    """A horizontal strip of mutually-exclusive option buttons (like radio buttons)."""
 
     def __init__(self, options: list[str], selected: int,
                  x: int, y: int, btn_w: int, btn_h: int, gap: int = 6) -> None:
         self.options = options
-        self.selected = selected
+        self.selected = selected   # index of the currently chosen option
+        # Build one _Button per option, evenly spaced.
         self.buttons = [
             _Button(pygame.Rect(x + i * (btn_w + gap), y, btn_w, btn_h), lbl)
             for i, lbl in enumerate(options)
         ]
 
     def draw(self, surf: pygame.Surface, fsize: int = 15) -> None:
+        """Draws all option buttons, highlighting the currently selected one."""
         for i, btn in enumerate(self.buttons):
             btn.draw(surf, active=(i == self.selected), fsize=fsize)
 
     def handle_click(self, pos: tuple[int, int]) -> bool:
+        """Updates the selected index if a button was clicked. Returns True on hit."""
         for i, btn in enumerate(self.buttons):
             if btn.hit(pos):
                 self.selected = i
@@ -125,30 +159,34 @@ class _OptionRow:
         return False
 
     def update_hover(self, pos: tuple[int, int]) -> None:
+        """Forwards the mouse position to all buttons so hovering works."""
         for btn in self.buttons:
             btn.update_hover(pos)
 
     @property
     def value(self) -> str:
+        """Returns the string label of the currently selected option."""
         return self.options[self.selected]
 
 
 # ── TextInput ─────────────────────────────────────────────────────────────────
 class _TextInput:
-    """Single-line digit input for the terrain seed."""
+    """Single-line digit-only text field for the terrain seed."""
 
     def __init__(self, rect: pygame.Rect, placeholder: str = "Random",
                  max_chars: int = 9) -> None:
         self.rect = pygame.Rect(rect)
         self.placeholder = placeholder
         self.max_chars = max_chars
-        self.text = ""
-        self.focused = False
-        self._blink = 0.0
+        self.text = ""           # current digits typed by the user
+        self.focused = False     # True when this field has keyboard focus
+        self._blink = 0.0        # accumulates time (seconds) for cursor blink
         self._show_cursor = True
 
     def draw(self, surf: pygame.Surface, dt: float = 0) -> None:
+        """Draws the input box, placeholder or text, and a blinking cursor when focused."""
         self._blink += dt
+        # Toggle cursor visibility every 0.5 seconds.
         if self._blink >= 0.5:
             self._blink = 0.0
             self._show_cursor = not self._show_cursor
@@ -163,6 +201,7 @@ class _TextInput:
         _blit_text(surf, display + cursor, _font(15), color, midleft=inner.midleft)
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        """Handles KEYDOWN events: backspace removes the last digit; digit keys append."""
         if not self.focused or event.type != pygame.KEYDOWN:
             return
         if event.key == pygame.K_BACKSPACE:
@@ -171,22 +210,26 @@ class _TextInput:
             self.text += event.unicode
 
     def handle_click(self, pos: tuple[int, int]) -> None:
+        """Gives or removes focus based on whether the click was inside this field."""
         self.focused = self.rect.collidepoint(pos)
 
     @property
     def value(self) -> int | None:
+        """Returns the entered digits as an int, or None if the field is empty."""
         return int(self.text) if self.text else None
 
 
 # ── Main Menu Screen ──────────────────────────────────────────────────────────
 class _MainMenuScreen:
+    """The title screen with the four main navigation buttons."""
+
     def __init__(self, screen: pygame.Surface, save_exists: bool) -> None:
         self.screen = screen
-        self.save_exists = save_exists
+        self.save_exists = save_exists   # disables "Load Game" when no save file exists
         self.clock = pygame.time.Clock()
 
     def run(self) -> str:
-        """Returns 'new_game' | 'load' | 'settings' | 'quit'."""
+        """Runs the title screen loop. Returns one of: 'new_game', 'load', 'settings', 'quit'."""
         btn_labels = ["New Game", "Load Game", "Settings", "Quit"]
         btn_w, btn_h, v_gap = 260, 48, 10
 
@@ -255,12 +298,15 @@ class _MainMenuScreen:
 
 # ── New Game Screen ───────────────────────────────────────────────────────────
 class _NewGameScreen:
+    """The new game configuration screen (map size, difficulty, terrain, speed, etc.)."""
+
     def __init__(self, screen: pygame.Surface) -> None:
         self.screen = screen
         self.clock = pygame.time.Clock()
         self._build(screen.get_size())
 
     def _build(self, size: tuple[int, int]) -> None:
+        """Constructs all option rows and buttons, positioned relative to the screen size."""
         w, h = size
         cx = w // 2
         pW = min(740, w - 60)
@@ -300,6 +346,7 @@ class _NewGameScreen:
         self._rows = (r0, r1, r2, r3, r4, r5)
 
     def run(self) -> GameConfig | None:
+        """Runs the new game options loop. Returns a GameConfig on Start, or None on Back/Escape."""
         dt = 0.0
         while True:
             pos = pygame.mouse.get_pos()
@@ -399,6 +446,7 @@ class _NewGameScreen:
         return None
 
     def _build_config(self) -> GameConfig:
+        """Assembles the GameConfig from the current widget selections."""
         return GameConfig(
             map_size_name=self.map_size.value,
             difficulty=self.difficulty.value,
@@ -411,11 +459,14 @@ class _NewGameScreen:
 
 # ── Settings Screen ───────────────────────────────────────────────────────────
 class _SettingsScreen:
+    """A static information screen showing keybind and save-slot reference."""
+
     def __init__(self, screen: pygame.Surface) -> None:
         self.screen = screen
         self.clock = pygame.time.Clock()
 
     def run(self) -> None:
+        """Displays the settings panel until the player clicks Back or presses Escape."""
         while True:
             surf = self.screen
             w, h = surf.get_size()

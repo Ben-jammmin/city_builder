@@ -1,4 +1,20 @@
-"""Individual panel renderers that make up the sidebar (stats, controls, tool buttons, etc.)."""
+"""
+ui_panels.py — Low-level panel and widget renderers for the sidebar.
+
+SidebarPanelRenderer draws each individual section of the bottom command bar:
+  - City stats panel     (money, population, jobs, date, revenue)
+  - Controls panel       (tax +/-, pause, speed, save, load buttons)
+  - Demand panel         (R/C/I horizontal progress bars)
+  - System panel         (power, water, fire, police, education coverage)
+  - Menu tab row         (Zones / Recreation / Utilities / Services / Transit)
+  - Tool button grid     (active tools for the selected menu tab)
+
+Drawing helpers at the bottom (_panel, _button, _bar, _draw_text) are shared
+primitives used by every panel above.
+
+fit_label(label, font, max_width) truncates a string with "..." so it always
+fits within the given pixel width — used wherever space is tight.
+"""
 from __future__ import annotations
 
 import pygame
@@ -17,10 +33,12 @@ from .models import (
 )
 from .settings import COLORS, HIGH_RISK_THRESHOLD, MAX_TAX_RATE, MIN_TAX_RATE, ROAD_TRAFFIC_CAPACITY
 
-PANEL_GAP = 6
-PANEL_PAD = 10
-BUTTON_GAP = 6
+# ── Layout constants ───────────────────────────────────────────────────────────
+PANEL_GAP = 6    # vertical gap between stacked panels
+PANEL_PAD = 10   # inner horizontal padding inside a panel
+BUTTON_GAP = 6   # gap between adjacent buttons in the same row
 
+# Short display names for the menu tabs across the top of the tool area.
 MENU_TAB_LABELS = {
     "Zones": "Zones",
     "Recreation": "Rec",
@@ -62,6 +80,7 @@ TOOL_SHORT_LABELS = {
 }
 
 def _build_swatch_map() -> dict:
+    """Returns a dict mapping each Tool to its colour swatch shown on the tool button."""
     return {
         Tool.RESIDENTIAL:       COLORS["residential"],
         Tool.DENSE_RESIDENTIAL: COLORS["residential"],
@@ -94,6 +113,10 @@ def _build_swatch_map() -> dict:
 
 
 def fit_label(label: str, font: pygame.font.Font, max_width: int) -> str:
+    """
+    Truncates label to fit within max_width pixels, appending "..." when cut.
+    Returns an empty string if even "..." won't fit.
+    """
     if max_width <= 0:
         return ""
     if font.size(label)[0] <= max_width:
@@ -102,17 +125,24 @@ def fit_label(label: str, font: pygame.font.Font, max_width: int) -> str:
     if font.size(suffix)[0] > max_width:
         return ""
     trimmed = label.rstrip()
+    # Strip one character at a time from the right until it fits.
     while trimmed and font.size(trimmed + suffix)[0] > max_width:
         trimmed = trimmed[:-1].rstrip()
     return f"{trimmed}{suffix}" if trimmed else suffix
 
 
 class SidebarPanelRenderer:
+    """Draws every individual panel section inside the sidebar."""
+
     def __init__(self, sidebar) -> None:
+        # Keep a reference to the parent Sidebar for fonts and click-target lists.
         self.sidebar = sidebar
         self._swatch_map = _build_swatch_map()
 
+    # ── Panel draw methods ─────────────────────────────────────────────────────
+
     def draw_city_stats(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
+        """Draws the city overview panel (money, pop, jobs, date, revenue, net) and returns the bottom y."""
         panel = self._panel(surface, x, y, width, 100)
         self._draw_text(surface, "City", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         col_w = (width - PANEL_PAD * 2) // 2
@@ -132,6 +162,7 @@ class SidebarPanelRenderer:
         return panel.bottom
 
     def draw_menu_tabs(self, surface: pygame.Surface, x: int, y: int, width: int, active_menu: str) -> int:
+        """Draws the row of menu category tabs and registers them as click targets. Returns the bottom y."""
         gap = 4
         menu_count = max(1, len(MENU_ORDER))
         button_w = (width - gap * (menu_count - 1)) // menu_count
@@ -143,6 +174,7 @@ class SidebarPanelRenderer:
         return y + 32
 
     def draw_controls(self, surface: pygame.Surface, stats, x: int, y: int, width: int, fullscreen: bool, speed_index: int, speed_labels: list) -> int:
+        """Draws the controls panel (tax, pause, speed, save/load buttons). Returns the bottom y."""
         panel = self._panel(surface, x, y, width, 96)
         self._draw_text(surface, "Controls", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
 
@@ -175,6 +207,7 @@ class SidebarPanelRenderer:
         return panel.bottom
 
     def draw_demand_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
+        """Draws three horizontal demand bars for Residential, Commercial, and Industrial zones. Returns the bottom y."""
         panel = self._panel(surface, x, y, width, 78)
         self._draw_text(surface, "Demand", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         self._bar(surface, "R", stats.demand_residential, COLORS["residential"], panel.x + PANEL_PAD, panel.y + 32, width - PANEL_PAD * 2)
@@ -183,6 +216,7 @@ class SidebarPanelRenderer:
         return panel.bottom
 
     def draw_system_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
+        """Draws the systems panel showing power, water, fire, police, and education status. Returns the bottom y."""
         panel = self._panel(surface, x, y, width, 154)
         self._draw_text(surface, "Systems", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         self._draw_text(
@@ -255,6 +289,13 @@ class SidebarPanelRenderer:
         active_tool: Tool,
         active_menu: str,
     ) -> int:
+        """
+        Draws a 2-column grid of tool buttons for the active menu tab.
+
+        Tools are laid out two per row. Each button shows a colour swatch
+        (matching the zone or infrastructure colour) and a hotkey prefix.
+        Returns the bottom y of the panel.
+        """
         tools = MENU_TOOLS[active_menu]
         rows = (len(tools) + 1) // 2
         row_h = 30
@@ -278,7 +319,10 @@ class SidebarPanelRenderer:
             self._button(surface, rect, label, active=tool == active_tool, align_left=True, swatch_color=swatch)
         return panel.bottom
 
+    # ── Tile inspection helpers ────────────────────────────────────────────────
+
     def _tile_status(self, tile, city_map: CityMap, x: int, y: int) -> tuple[str, tuple]:
+        """Returns a (status_text, color) pair describing what is stopping or enabling growth."""
         if tile.has_road:
             load = tile.traffic_load
             if load > ROAD_TRAFFIC_CAPACITY:
@@ -301,6 +345,7 @@ class SidebarPanelRenderer:
         return "Growing...", COLORS["money_good"]
 
     def _tile_kind(self, tile) -> str:
+        """Returns a human-readable label for the primary content of a tile."""
         if tile.building != BuildingType.NONE:
             return BUILDING_LABELS[tile.building]
         if tile.has_road:
@@ -317,8 +362,11 @@ class SidebarPanelRenderer:
         return "Empty"
 
     def _tool_button_label(self, tool: Tool, hotkey: str) -> str:
+        """Builds the text shown on a tool button, e.g. 'R Road' or 'W Power Line'."""
         label = TOOL_SHORT_LABELS.get(tool, TOOL_LABELS[tool])
         return f"{hotkey} {label}".strip()
+
+    # ── Low-level drawing primitives ───────────────────────────────────────────
 
     def _draw_stat_pair(
         self,
@@ -330,6 +378,7 @@ class SidebarPanelRenderer:
         width: int,
         positive: bool | None = None,
     ) -> None:
+        """Draws a muted label and a coloured value side by side (green=good, red=bad)."""
         self._draw_text(surface, label, x, y, self.sidebar.font_small, COLORS["muted_text"])
         color = COLORS["text"]
         if positive is True:
@@ -341,15 +390,21 @@ class SidebarPanelRenderer:
         self._draw_text(surface, fitted, value_x, y, self.sidebar.font_small, color)
 
     def _utility_color(self, capacity: int, usage: int, uncovered_zones: int) -> tuple[int, int, int]:
+        """Returns green if the utility has spare capacity and zero uncovered zones; red otherwise."""
         if capacity <= 0 or uncovered_zones > 0 or usage > capacity:
             return COLORS["money_bad"]
         return COLORS["money_good"]
 
     def _panel(self, surface: pygame.Surface, x: int, y: int, width: int, height: int) -> pygame.Rect:
+        """
+        Draws a rounded dark rectangle with a subtle top highlight and a
+        separator line 24 px down (below the panel title row). Returns the Rect.
+        """
         rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, COLORS["sidebar_panel"], rect, border_radius=6)
+        # Subtle top edge highlight.
         pygame.draw.line(surface, (38, 48, 60), (rect.x + 6, rect.y + 1), (rect.right - 6, rect.y + 1))
-        # Separator line under the panel title
+        # Separator line under the panel title row (two lines = thin groove effect).
         sep_y = rect.y + 24
         pygame.draw.line(surface, (20, 26, 34), (rect.x + 6, sep_y), (rect.right - 6, sep_y))
         pygame.draw.line(surface, (36, 44, 56), (rect.x + 6, sep_y + 1), (rect.right - 6, sep_y + 1))
@@ -365,6 +420,12 @@ class SidebarPanelRenderer:
         y: int,
         width: int,
     ) -> None:
+        """
+        Draws a labelled horizontal progress bar.
+
+        value is 0-100 — the bar fills proportionally from left to right.
+        The percentage is also printed on the right end of the bar.
+        """
         label_surface = self.sidebar.font_small.render(label, True, COLORS["text"])
         surface.blit(label_surface, (x, y - 2))
         bar_x = x + 38
@@ -386,6 +447,14 @@ class SidebarPanelRenderer:
         align_left: bool = False,
         swatch_color: tuple | None = None,
     ) -> None:
+        """
+        Draws a rounded button with optional active/disabled/swatch states.
+
+        active=True  → highlighted background + blue left-edge accent bar
+        disabled=True → greyed out, text dimmed
+        swatch_color  → small colour diamond shown left of the label (tool buttons)
+        align_left    → label is left-aligned (tool buttons); default is centred
+        """
         color = COLORS["sidebar_panel_active"] if active else COLORS["sidebar_panel"]
         if disabled:
             color = (36, 40, 46)
@@ -437,10 +506,12 @@ class SidebarPanelRenderer:
         font: pygame.font.Font,
         color: tuple[int, int, int] | None = None,
     ) -> None:
+        """Renders text at (x, y) using the given font and optional colour."""
         rendered = font.render(text, True, color or COLORS["text"])
         surface.blit(rendered, (x, y))
 
     def _draw_wrapped_text(self, surface: pygame.Surface, text: str, x: int, y: int, max_width: int) -> None:
+        """Word-wraps text into up to 2 lines, each spaced 17 px apart."""
         words = text.split()
         lines: list[str] = []
         line = ""

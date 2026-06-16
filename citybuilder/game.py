@@ -1,4 +1,30 @@
-"""Main game loop — handles input, runs the simulation, and draws every frame."""
+"""
+game.py — Main game loop, input handling, and top-level game logic.
+
+Game.__init__  sets up pygame, creates the map, camera, renderer, sidebar, and
+simulation, then loads or generates the city.
+
+Game.run() is the main loop:
+  1. tick the clock and collect dt (delta-time in seconds since last frame)
+  2. _handle_events() — processes the pygame event queue
+  3. _handle_keyboard_camera() — smooth WASD/arrow key scrolling
+  4. simulation.update(dt) — monthly simulation tick when enough time has passed
+  5. pedestrian_system.update() — move walking pedestrians
+  6. _check_message_sounds() — play sound effects for new advisor messages
+  7. _draw() — render map + sidebar + HUD then flip the display
+
+SaveOverlay is a separate full-screen dimmed panel for picking save/load slots.
+It has its own draw() and handle_click() so Game.run() can delegate to it.
+
+Key design decisions
+--------------------
+- painting flag: held mouse button drags the active tool across multiple tiles,
+  but painted_this_drag tracks which tiles were hit to avoid double-spending.
+- dragging_camera: middle mouse button pans the camera smoothly.
+- _refresh_city_status() calls simulation.refresh_systems() after every build
+  action so the power/water/coverage stats are always up to date.
+- Save slots are stored in saves/slot_N.json, N=1..5 (see save_load.py).
+"""
 from __future__ import annotations
 
 import pygame
@@ -54,26 +80,35 @@ from .ui import Sidebar
 
 
 class SaveOverlay:
-    """Full-screen dimmed overlay for choosing a save/load slot."""
+    """
+    Full-screen dimmed panel for choosing a save or load slot.
+
+    The overlay blocks all other input while visible. Clicking a slot number
+    triggers a save or load; clicking Cancel or pressing Escape dismisses it.
+    """
 
     def __init__(self) -> None:
         self.visible = False
-        self.mode = "save"  # "save" or "load"
+        self.mode = "save"   # "save" or "load"
         self._slot_rects: list[pygame.Rect] = []
         self._cancel_rect = pygame.Rect(0, 0, 0, 0)
+        # _saves holds slot metadata dicts (or None for empty slots) read from disk.
         self._saves: list[dict | None] = [None] * NUM_SAVE_SLOTS
         self._font: pygame.font.Font | None = None
         self._font_sm: pygame.font.Font | None = None
 
     def open(self, mode: str) -> None:
+        """Shows the overlay and refreshes the slot metadata from disk."""
         self.visible = True
         self.mode = mode
         self._saves = list_saves()
 
     def close(self) -> None:
+        """Hides the overlay without taking any action."""
         self.visible = False
 
     def _ensure_fonts(self) -> None:
+        """Initialises fonts lazily (pygame display must be up before SysFont works)."""
         if self._font is None:
             self._font = pygame.font.SysFont("Segoe UI", 18, bold=True)
             self._font_sm = pygame.font.SysFont("Segoe UI", 15)
@@ -144,7 +179,7 @@ class SaveOverlay:
                           self._cancel_rect.centery - ct.get_height() // 2))
 
     def handle_click(self, pos: tuple[int, int]) -> int | str | None:
-        """Returns 1-5 (slot number), 'cancel', or None if not handled."""
+        """Processes a left-click on the overlay. Returns slot number (1-5), 'cancel', or None."""
         if self._cancel_rect.collidepoint(pos):
             return "cancel"
         for i, rect in enumerate(self._slot_rects):
@@ -156,6 +191,8 @@ class SaveOverlay:
 
 
 class Game:
+    """Top-level game object — owns the map, camera, renderer, sidebar, and simulation."""
+
     def __init__(self, config: GameConfig | None = None) -> None:
         cfg = config if config is not None else GameConfig()
 
@@ -166,15 +203,17 @@ class Game:
         self.screen = pygame.display.set_mode(self.windowed_size, pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
         self.running = True
-        self.quit_to_desktop = False
+        self.quit_to_desktop = False   # True = close the app; False = back to menu
 
         self.save_overlay = SaveOverlay()
+        # Find the speed preset closest to the one chosen in GameConfig.
         self._speed_index = min(
             range(len(SIM_SPEED_PRESETS)),
             key=lambda i: abs(SIM_SPEED_PRESETS[i][1] - cfg.sim_seconds_per_month),
         )
         self._sim_speed = SIM_SPEED_PRESETS[self._speed_index][1]
 
+        # Load an existing save file or generate a fresh city.
         recent = most_recent_slot() if cfg.load_save else None
         if recent is not None:
             self.map, self.stats = load_game(slot_path(recent))
@@ -185,6 +224,7 @@ class Game:
 
         self.simulation = Simulation(self.map, self.stats)
         self.pedestrian_system = PedestrianSystem(max_count=50)
+        # Viewport covers the full window except for the bottom command bar.
         viewport = pygame.Rect(0, 0, self.windowed_size[0], self.windowed_size[1] - COMMAND_BAR_HEIGHT)
         self.camera = Camera(self.map.width * TILE_SIZE, self.map.height * TILE_SIZE, viewport)
         self.renderer = Renderer()
@@ -196,9 +236,10 @@ class Game:
         self.active_menu = menu_for_tool(self.active_tool)
         self.view_mode = ViewMode.NORMAL
         self.hover_tile: tuple[int, int] | None = None
-        self.painting = False
-        self.dragging_camera = False
+        self.painting = False          # True while a mouse button is held over the map
+        self.dragging_camera = False   # True while middle mouse button is held
         self.last_mouse_pos = (0, 0)
+        # Track which tiles were already painted this drag to avoid double cost.
         self.painted_this_drag: set[tuple[int, int]] = set()
         self.sounds = SoundManager()
         self._last_sound_msg: str = self.stats.messages[-1] if self.stats.messages else ""
@@ -216,7 +257,10 @@ class Game:
             self._draw()
         return self.quit_to_desktop
 
+    # ── Event handling ─────────────────────────────────────────────────────────
+
     def _handle_events(self) -> None:
+        """Drains the pygame event queue and dispatches each event to the appropriate handler."""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
@@ -241,6 +285,7 @@ class Game:
         self.hover_tile = self._mouse_tile(pygame.mouse.get_pos())
 
     def _handle_keydown(self, event: pygame.event.Event) -> None:
+        """Handles keyboard shortcuts: Escape, F5/F9, F11, Space, Q/E, V, +/-, WASD, hotkeys."""
         if event.key == pygame.K_ESCAPE:
             if self.save_overlay.visible:
                 self.save_overlay.close()
@@ -275,21 +320,29 @@ class Game:
                 self.active_tool = TOOL_HOTKEYS[key_name]
                 self.active_menu = menu_for_tool(self.active_tool)
 
+    # ── Speed and view-mode cycling ────────────────────────────────────────────
+
     def _cycle_speed(self, delta: int) -> None:
+        """Moves the speed preset index by delta steps (wraps at the ends)."""
         self._set_speed_index(self._speed_index + delta)
 
     def _set_speed_index(self, idx: int) -> None:
+        """Clamps idx to a valid preset and applies the new simulation speed."""
         self._speed_index = max(0, min(len(SIM_SPEED_PRESETS) - 1, idx))
         self._sim_speed = SIM_SPEED_PRESETS[self._speed_index][1]
         label = SIM_SPEED_PRESETS[self._speed_index][0]
         self.stats.add_message(f"Speed set to {label}.")
 
     def _cycle_view_mode(self, direction: int = 1) -> None:
+        """Cycles through Normal/Power/Water/Fire/Police/Terrain views (press V)."""
         current_index = VIEW_ORDER.index(self.view_mode)
         self.view_mode = VIEW_ORDER[(current_index + direction) % len(VIEW_ORDER)]
         self.stats.add_message(f"{VIEW_LABELS[self.view_mode]} view.")
 
+    # ── Fullscreen and window resize ───────────────────────────────────────────
+
     def _toggle_fullscreen(self) -> None:
+        """Switches between fullscreen and windowed mode (F11 or Alt+Enter)."""
         if self.fullscreen:
             self._set_windowed()
         else:
@@ -297,25 +350,31 @@ class Game:
         self._resize_layout(*self.screen.get_size())
 
     def _set_fullscreen(self) -> None:
+        """Saves current window size then switches to fullscreen or borderless."""
         self.windowed_size = self.screen.get_size()
         try:
+            # SCALED lets pygame upscale if the desktop resolution differs.
             self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.SCALED)
         except pygame.error:
+            # Fallback: borderless window at desktop size.
             self.screen = pygame.display.set_mode(self._desktop_size(), pygame.NOFRAME)
         self.fullscreen = True
         self.stats.add_message("Fullscreen enabled.")
 
     def _set_windowed(self) -> None:
+        """Restores the previously saved windowed size."""
         self.screen = pygame.display.set_mode(self.windowed_size, pygame.RESIZABLE)
         self.fullscreen = False
         self.stats.add_message("Windowed mode enabled.")
 
     def _resize_window(self, width: int, height: int) -> None:
+        """Handles VIDEORESIZE events; enforces a minimum 800×600 window."""
         self.windowed_size = (max(800, width), max(600, height))
         self.screen = pygame.display.set_mode(self.windowed_size, pygame.RESIZABLE)
         self._resize_layout(*self.screen.get_size())
 
     def _desktop_size(self) -> tuple[int, int]:
+        """Returns the primary monitor's resolution for the fullscreen fallback."""
         try:
             return pygame.display.get_desktop_sizes()[0]
         except (AttributeError, IndexError):
@@ -323,11 +382,16 @@ class Game:
             return display_info.current_w, display_info.current_h
 
     def _resize_layout(self, width: int, height: int) -> None:
+        """Updates sidebar and camera viewport whenever the window size changes."""
         self.sidebar.set_screen_size(width, height)
+        # Map viewport takes all vertical space above the sidebar.
         map_height = max(240, height - self.sidebar.current_height())
         self.camera.set_viewport(pygame.Rect(0, 0, width, map_height))
 
+    # ── Mouse input ────────────────────────────────────────────────────────────
+
     def _handle_mouse_down(self, event: pygame.event.Event) -> None:
+        """Handles MOUSEBUTTONDOWN: save overlay, minimap click, sidebar, or map painting."""
         if self.save_overlay.visible:
             if event.button == 1:
                 result = self.save_overlay.handle_click(event.pos)
@@ -366,6 +430,7 @@ class Game:
             self._bulldoze_at_mouse(event.pos)
 
     def _handle_mouse_up(self, event: pygame.event.Event) -> None:
+        """Ends the current painting or camera-drag drag when the mouse button is released."""
         if event.button in (1, 3):
             self.painting = False
             self.painted_this_drag.clear()
@@ -373,6 +438,7 @@ class Game:
             self.dragging_camera = False
 
     def _handle_mouse_motion(self, event: pygame.event.Event) -> None:
+        """Continues camera drag or paints more tiles while the mouse is held down."""
         if self.save_overlay.visible:
             return
         if self.dragging_camera:
@@ -387,6 +453,7 @@ class Game:
         self.last_mouse_pos = event.pos
 
     def _handle_ui_action(self, action) -> None:
+        """Dispatches a (kind, value) tuple returned by sidebar.handle_click()."""
         kind, value = action
         if kind == "tool":
             self.active_tool = value
@@ -410,9 +477,11 @@ class Game:
             self._resize_layout(*self.screen.get_size())
 
     def _handle_keyboard_camera(self, dt: float) -> None:
+        """Pans the camera smoothly with WASD / arrow keys. Speed scales with dt and zoom."""
         if self.save_overlay.visible:
             return
         keys = pygame.key.get_pressed()
+        # Divide by zoom so panning feels consistent regardless of zoom level.
         speed = 520 * dt / self.camera.zoom
         dx = 0.0
         dy = 0.0
@@ -427,7 +496,10 @@ class Game:
         if dx or dy:
             self.camera.move(dx, dy)
 
+    # ── Tool placement ─────────────────────────────────────────────────────────
+
     def _apply_tool_at_mouse(self, pos: tuple[int, int]) -> None:
+        """Applies the active tool to the tile under the mouse (skips already-painted tiles)."""
         tile_pos = self._mouse_tile(pos)
         if tile_pos is None or tile_pos in self.painted_this_drag:
             return
@@ -491,6 +563,7 @@ class Game:
             self.stats.add_message("Cannot place zone.")
 
     def _zone_cost(self, zone: ZoneType, level: int, recreation_type: RecreationType | None = None) -> int:
+        """Returns the cost to place this zone type. Dense zones use a cost multiplier."""
         if zone == ZoneType.PARK and recreation_type is not None:
             return RECREATION_COST.get(recreation_type.value, 150)
         multiplier = ZONE_LEVEL_COST_MULTIPLIERS.get(level, 1.0)
@@ -582,10 +655,18 @@ class Game:
                 self.stats.add_message("Cannot place building.")
 
     def _bulldoze(self, tile_pos: tuple[int, int]) -> None:
+        """
+        Clears the tile at tile_pos, deducting the appropriate cost.
+
+        First pass removes man-made structures (zone, road, utilities, building).
+        Second pass (if the tile was already empty) clears natural terrain obstacles
+        (water, forest, hill) which cost more to remove than built structures.
+        """
         x, y = tile_pos
         tile = self.map.get(x, y)
         cost = BULLDOZE_COST
         item_name = "tile"
+        # Natural terrain costs more to clear than a simple built structure.
         if tile.is_empty and tile.terrain != TerrainType.GRASS:
             if tile.terrain == TerrainType.WATER:
                 cost = TERRAIN_CLEAR_COSTS["water"]
@@ -605,17 +686,25 @@ class Game:
             self.stats.add_message(f"Cleared {item_name} for ${cost}.")
             self._refresh_city_status()
 
+    # ── Save / load ────────────────────────────────────────────────────────────
+
     def _open_save_overlay(self) -> None:
+        """Opens the slot selection overlay in save mode."""
         self.save_overlay.open("save")
 
     def _open_load_overlay(self) -> None:
+        """Opens the slot selection overlay in load mode."""
         self.save_overlay.open("load")
 
     def _do_save(self, slot: int) -> None:
+        """Copies active fire timers back onto tiles, then serialises the game to disk."""
+        for (fx, fy), burn_time in self.simulation._fires.items():
+            self.map.get(fx, fy).fire_burn_time = burn_time
         save_game(self.map, self.stats, slot_path(slot))
         self.stats.add_message(f"Saved to slot {slot}.")
 
     def _do_load(self, slot: int) -> None:
+        """Loads a save file from disk and hot-swaps the running game state."""
         p = slot_path(slot)
         if not p.exists():
             self.stats.add_message(f"Slot {slot} is empty.")
@@ -627,10 +716,12 @@ class Game:
             return
         self.map, self.stats = city_map, stats
         self.simulation = Simulation(self.map, self.stats)
+        # Re-register any tiles that were on fire when the game was saved.
         for x, y, tile in self.map.iter_tiles():
             if tile.on_fire:
-                self.simulation._fires[(x, y)] = 0.0
+                self.simulation._fires[(x, y)] = tile.fire_burn_time
         self.pedestrian_system.clear()
+        # Recalculate camera pixel extents for the newly loaded map size.
         hw = self.camera.tile_w // 2
         self.camera.map_width  = self.map.width
         self.camera.map_height = self.map.height
@@ -640,21 +731,26 @@ class Game:
         self._refresh_city_status()
         self.stats.add_message(f"Loaded slot {slot}.")
 
+    # ── Utility helpers ────────────────────────────────────────────────────────
+
     def _can_afford(self, cost: int) -> bool:
+        """Returns True if the player has enough money; shows a message and returns False if not."""
         if self.stats.money < cost:
             self.stats.add_message(f"Not enough money for ${cost} action.")
             return False
         return True
 
     def _refresh_city_status(self) -> None:
+        """Re-runs the BFS utility/coverage sweep so stats are immediately up to date."""
         self.simulation.refresh_systems()
 
     def _check_message_sounds(self) -> None:
+        """Plays a sound effect when the latest advisor message matches a known keyword."""
         if not self.stats.messages:
             return
         latest = self.stats.messages[-1]
         if latest == self._last_sound_msg:
-            return
+            return   # same message as before — don't replay the sound
         self._last_sound_msg = latest
         ml = latest.lower()
         if "fire outbreak" in ml:
@@ -665,13 +761,22 @@ class Game:
             self.sounds.play("crime")
 
     def _jump_camera_minimap(self, pos: tuple[int, int]) -> None:
+        """
+        Pans the camera so the tile clicked on the minimap appears in the
+        centre of the main viewport.
+
+        Converts the click's pixel fraction across the minimap to a tile
+        coordinate, then applies the isometric projection to get the world-pixel
+        position and sets the camera scroll accordingly.
+        """
         mr = self.renderer.minimap_rect
         if mr is None:
             return
         mm_w = min(self.map.width, 128)
         mm_h = min(self.map.height, 96)
-        mm_x = mr.x + 4
+        mm_x = mr.x + 4   # inner area starts 4 px inside the minimap panel border
         mm_y = mr.y + 4
+        # frac_x / frac_y = click position as a 0-1 fraction across the minimap.
         frac_x = max(0.0, min(1.0, (pos[0] - mm_x) / mm_w))
         frac_y = max(0.0, min(1.0, (pos[1] - mm_y) / mm_h))
         tx = int(frac_x * self.map.width)
@@ -691,6 +796,7 @@ class Game:
         self.camera.clamp()
 
     def _mouse_tile(self, pos: tuple[int, int]) -> tuple[int, int] | None:
+        """Converts a screen pixel to a map tile, or returns None if out of bounds."""
         tile_pos = self.camera.screen_to_tile(pos)
         if tile_pos is None:
             return None
@@ -698,7 +804,10 @@ class Game:
             return None
         return tile_pos
 
+    # ── Drawing ────────────────────────────────────────────────────────────────
+
     def _draw(self) -> None:
+        """Renders one complete frame: map, sidebar, HUD hint bar, save overlay."""
         self.sidebar.speed_index = self._speed_index
         self.screen.fill(COLORS["background"])
         self.renderer.draw_map(
@@ -726,6 +835,7 @@ class Game:
         pygame.display.flip()
 
     def _draw_top_hint(self) -> None:
+        """Draws the thin toolbar at the top of the screen showing active tool, view, and hotkeys."""
         font = self._hint_font
         speed_label = SIM_SPEED_PRESETS[self._speed_index][0]
         text = (

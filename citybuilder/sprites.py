@@ -1,5 +1,40 @@
-"""Sprite drawing routines — procedurally generates all tile, building, and road graphics.
-All sprites are cached in SpriteAtlas so each unique combination is only drawn once."""
+"""
+sprites.py — Procedural sprite generation for the isometric city view.
+
+Every tile, building, road, and pedestrian is drawn programmatically using
+pygame drawing primitives — no image files are required. If PNG files exist in
+assets/ they are used instead (see asset_loader.py).
+
+SpriteAtlas
+-----------
+Owns a dict cache keyed by (type, size, variant, ...) so each unique
+combination of tile size and visual state is only generated once per session.
+
+Drawing pipeline per tile (called by renderer.py)
+-------------------------------------------------
+  draw_terrain      → grass / water / forest / hill diamond
+  draw_zone_base    → translucent tinted lot indicator
+  draw_building     → growing residential / commercial / industrial / park structure
+  draw_civic_building → fixed-size civic buildings (power plant, hospital, etc.)
+  draw_road         → asphalt + sidewalk with directional arms
+  draw_pedestrian   → tiny coloured dot figure
+
+Isometric face directions
+-------------------------
+  Tiles are drawn as four-sided diamonds.  Three visible faces:
+    top/roof  — the flat diamond surface viewed from above
+    left/SW   — the wall face facing south-west (left side on screen)
+    right/SE  — the wall face facing south-east (right side on screen)
+  Sun comes from the upper-left, so the left face is mid-lit, right face is dark.
+
+Coordinate conventions
+----------------------
+  cx, cy  — screen position of the tile's TOP (north) vertex
+  tw, th  — tile pixel width and height at current zoom
+  hw, hh  — half-width and half-height (= tw//2, th//2)
+  bh      — building height in pixels above the tile diamond
+  ey      — extra vertical headroom allocated above the tile for tall buildings
+"""
 from __future__ import annotations
 
 import math
@@ -168,14 +203,21 @@ _CIVIC_LABEL = {
 # ---------------------------------------------------------------------------
 
 class SpriteAtlas:
+    """
+    Generates and caches all procedural sprites.
+
+    Every draw_* method checks self.cache first; if the sprite isn't cached
+    yet it calls the corresponding _*_spr maker, stores the result, then blits.
+    """
+
     def __init__(self, font: pygame.font.Font) -> None:
         self.font = font
+        # Optional PNG sprite loader — None when USE_IMAGE_SPRITES is False.
         self.assets = ImageAssetStore() if USE_IMAGE_SPRITES else None
+        # Flat dict mapping a tuple key to the pre-rendered Surface.
         self.cache: dict = {}
 
-    # ------------------------------------------------------------------ #
-    # Public draw interface                                                #
-    # ------------------------------------------------------------------ #
+    # ── Public draw interface ──────────────────────────────────────────────────
 
     def draw_terrain(
         self,
@@ -189,6 +231,7 @@ class SpriteAtlas:
         y: int,
         same_neighbors: dict | None = None,
     ) -> None:
+        """Draws the terrain diamond for one tile (grass, water, forest, or hill)."""
         v = tile_variant(x, y)
         # Try PNG asset first (grass and water only; forest/hill stay procedural)
         if self.assets is not None and terrain in (TerrainType.GRASS, TerrainType.WATER):
@@ -212,6 +255,7 @@ class SpriteAtlas:
         level: int,
         recreation_type: RecreationType | None = None,
     ) -> None:
+        """Draws the semi-transparent tinted diamond that shows a lot's zone type."""
         key = ("ZB", zone, level, tw, recreation_type)
         spr = self._get(key, lambda: self._zone_base_spr(zone, level, tw, th, recreation_type))
         surface.blit(spr, (cx - tw // 2, cy))
@@ -230,9 +274,18 @@ class SpriteAtlas:
         rotation: int = 0,
         recreation_type: RecreationType | None = None,
     ) -> None:
+        """
+        Draws the building that has grown on a zoned lot.
+
+        development 0.0-1.0 maps to stages 1-4 which control the building height
+        and the level of detail drawn (windows, chimneys, signage, etc.).
+        At rotations 1 and 3 the sprite is flipped horizontally so it reads
+        correctly from the rotated camera angle.
+        """
         if development < 0.06 or (zone not in _BLD_FRACS and zone != ZoneType.PARK):
             return
         _draw_ground_shadow(surface, cx, cy, tw, th)
+        # Map 0-1 development to a 1-4 visual stage (more stages = taller building).
         stage   = max(1, min(4, int(development * 4) + 1))
         v       = variant & 3
         # Image assets only apply to standard zones, not recreation subtypes
@@ -263,6 +316,13 @@ class SpriteAtlas:
         building: BuildingType,
         rotation: int = 0,
     ) -> None:
+        """
+        Draws a fixed civic building (power plant, hospital, etc.) at this tile.
+
+        Civic buildings use a fixed height multiplier from _CIVIC_HEIGHT instead
+        of a development stage. An abbreviated label (e.g. "H+") is printed on
+        the roof at higher zoom levels for quick identification.
+        """
         _draw_ground_shadow(surface, cx, cy, tw, th)
         asset = self._asset(f"civic/{building.value}", tw)
         if asset is not None:
@@ -289,6 +349,13 @@ class SpriteAtlas:
         th: int,
         connections: dict[str, bool],
     ) -> None:
+        """
+        Draws a road tile with arms extending toward connected neighbours.
+
+        connections is a dict with keys north/east/south/west (already rotated
+        by _rotate_connections in renderer.py). Arms are drawn as sidewalk +
+        asphalt strips; lane-centre dots appear at high zoom.
+        """
         if self.assets is not None:
             road_name = self._road_asset_name(connections)
             if road_name:
@@ -337,6 +404,12 @@ class SpriteAtlas:
         th: int,
         variant: int,
     ) -> None:
+        """
+        Draws a small pedestrian figure at the given screen position.
+
+        variant (0-2) selects from three colour palettes. At small zoom levels
+        the figure is a simple circle + rectangle; PNG assets are used if available.
+        """
         asset_size = max(8, tw // 3)
         asset = self._asset(f"pedestrians/pedestrian_{variant % 3}", asset_size)
         if asset is not None:
@@ -357,9 +430,7 @@ class SpriteAtlas:
                          border_radius=1)
         pygame.draw.circle(surface, (248, 205, 163), (cx, cy - size), max(1, size // 3))
 
-    # ------------------------------------------------------------------ #
-    # Window / story helpers                                               #
-    # ------------------------------------------------------------------ #
+    # ── Window and story-line helpers ─────────────────────────────────────────
 
     def _left_windows(
         self,
@@ -448,7 +519,12 @@ class SpriteAtlas:
         lc: tuple,
         n_floors: int,
     ) -> None:
-        """Draw horizontal story-divider lines across both visible faces."""
+        """
+        Draws horizontal floor-divider lines across both wall faces of the building.
+
+        One line per floor, evenly spaced up the building height (bh).
+        Only drawn when the building is tall enough to be legible (tw >= 18).
+        """
         if tw < 18 or n_floors < 2 or bh < 10:
             return
         lw = max(1, tw // 32)
@@ -464,9 +540,7 @@ class SpriteAtlas:
                              (hw, th + ey + y_at_v),
                              (tw, hh + ey + y_at_v), lw)
 
-    # ------------------------------------------------------------------ #
-    # Sprite makers                                                        #
-    # ------------------------------------------------------------------ #
+    # ── Sprite makers (cached surface generators) ─────────────────────────────
 
     def _terrain_spr(
         self,
@@ -476,6 +550,7 @@ class SpriteAtlas:
         variant: int,
         same_neighbors: dict | None,
     ) -> pygame.Surface:
+        """Creates and returns a new terrain tile Surface (tw × th, SRCALPHA)."""
         spr = pygame.Surface((tw, th), pygame.SRCALPHA)
         hw, hh = tw // 2, th // 2
         d = _diam_pts(tw, th)
@@ -500,18 +575,25 @@ class SpriteAtlas:
         d: list,
         variant: int,
     ) -> None:
-        base = _GRASS[variant]
-        light = _s(base, 30)
-        shadow = _s(base, -40)
+        """
+        Draws a grass tile with subtle lighting.
 
-        # Fill full diamond
+        The NW half is lighter (sun from the upper-left) and the SE half is
+        darker, giving the flat diamond a sense of 3-D depth. Four grass-blade
+        detail marks are added at larger tile sizes for texture.
+        """
+        base = _GRASS[variant]
+        light = _s(base, 30)    # slightly brighter for sun-facing half
+        shadow = _s(base, -40)  # slightly darker for shadow half
+
+        # Fill the full diamond shape first.
         pygame.draw.polygon(spr, base, d)
 
-        # Light NW half (north vertex → west vertex) — sun from upper-left
+        # Light NW half (north vertex → west vertex) — sun from upper-left.
         nw_face = [(hw, 0), (0, hh), (hw, hh), (hw, 0)]
         pygame.draw.polygon(spr, light, nw_face)
 
-        # Shadow SE half (south vertex → east vertex)
+        # Shadow SE half (south vertex → east vertex).
         se_face = [(hw, th), (tw, hh), (hw, hh), (hw, th)]
         pygame.draw.polygon(spr, shadow, se_face)
 
@@ -552,12 +634,19 @@ class SpriteAtlas:
         d: list,
         sn: dict | None,
     ) -> None:
+        """
+        Draws a water tile with wave lines, sparkle dots, and shore edges.
+
+        sn (same_neighbors) is a dict of {direction: bool} indicating which
+        adjacent tiles are also water. Shore edges are drawn on sides that
+        border non-water tiles to show a beach/bank transition.
+        """
         base = (44, 104, 148)
         deep = (34, 88, 130)
         shimmer = (92, 158, 195)
         foam = (148, 196, 222)
 
-        # Fill with deep water base
+        # Fill with deep water colour as the base layer.
         pygame.draw.polygon(spr, deep, d)
 
         # Lighter NW half
@@ -608,6 +697,12 @@ class SpriteAtlas:
         d: list,
         variant: int,
     ) -> None:
+        """
+        Draws 2-3 tree canopies on a dark floor tile.
+
+        Each tree has a shadow ellipse, a thin trunk, and a circular canopy
+        with a smaller highlight circle offset to the upper-left.
+        """
         floor_c = (48, 86, 50)
         floor_s = (32, 60, 34)
         pygame.draw.polygon(spr, floor_s, d)
@@ -658,10 +753,16 @@ class SpriteAtlas:
         d: list,
         variant: int,
     ) -> None:
+        """
+        Draws a hill tile with directional shading and contour ridge lines.
+
+        Three horizontal contour lines crossing the diamond suggest elevation.
+        Rock-highlight dots are added at larger tile sizes.
+        """
         base = (110, 110, 95)
-        lit  = (138, 138, 120)
-        dark = (70, 70, 60)
-        rock = (150, 146, 128)
+        lit  = (138, 138, 120)  # sun-facing NW half
+        dark = (70, 70, 60)     # shadow SE half
+        rock = (150, 146, 128)  # lighter rock highlights
 
         pygame.draw.polygon(spr, base, d)
 
@@ -691,12 +792,20 @@ class SpriteAtlas:
                 pygame.draw.circle(spr, lit, (rx - 1, ry - 1), max(1, tw // 26))
 
     def _zone_base_spr(self, zone: ZoneType, level: int, tw: int, th: int, recreation_type: RecreationType | None = None) -> pygame.Surface:
+        """
+        Creates the lot indicator diamond shown under every zoned tile.
+
+        The fill is a semi-transparent blend of grass green and the zone colour
+        so the grass PNG texture shows through. A coloured border and optional
+        inner ring (dense zones) make the zone type easy to identify.
+        """
         spr = pygame.Surface((tw, th), pygame.SRCALPHA)
         d = _diam_pts(tw, th)
         hw, hh = tw // 2, th // 2
         grass = _GRASS[0]
         color_key = recreation_type.value if (zone == ZoneType.PARK and recreation_type is not None) else zone.value
         zone_c = COLORS.get(color_key, (100, 100, 100))
+        # Mix 50/50 grass and zone colour so the tile looks tinted rather than solid.
         blend = tuple(int(grass[i] * 0.5 + zone_c[i] * 0.5) for i in range(3))
 
         # Semi-transparent fill so the grass PNG tile shows through underneath
@@ -738,10 +847,22 @@ class SpriteAtlas:
         extra_h: int,
         recreation_type: RecreationType | None = None,
     ) -> pygame.Surface:
+        """
+        Generates a zone building sprite for the given stage, level, and variant.
+
+        The surface is taller than one tile: th (tile height) + bh (building
+        height) + extra_h (headroom above the tile for tall tops). The sprite
+        is blitted at cy - bh - extra_h so the bottom of the building sits on
+        the tile's ground plane.
+
+        Three visible faces: roof (top diamond, lightest), left/SW face (mid),
+        right/SE face (darkest). Windows, story lines, and zone-specific details
+        are layered on top.
+        """
         surf_h = th + bh + extra_h
         spr = pygame.Surface((tw, surf_h), pygame.SRCALPHA)
         hw, hh = tw // 2, th // 2
-        ey = extra_h
+        ey = extra_h   # vertical offset to place tile diamond at the bottom of the surface
 
         if zone == ZoneType.PARK and recreation_type is not None:
             walls  = _REC_WALL.get(recreation_type, _ZONE_WALL[ZoneType.PARK])
@@ -850,6 +971,13 @@ class SpriteAtlas:
         bh: int,
         extra_h: int,
     ) -> pygame.Surface:
+        """
+        Generates a civic building sprite (power plant, police station, etc.).
+
+        Structure mirrors _building_spr but uses a fixed colour from COLORS
+        (keyed by _CIVIC_COLOR_KEY) and calls _civic_det for building-type-
+        specific details (chimney stripes, water tank, hospital cross, etc.).
+        """
         surf_h = th + bh + extra_h
         spr = pygame.Surface((tw, surf_h), pygame.SRCALPHA)
         hw, hh = tw // 2, th // 2
@@ -902,15 +1030,22 @@ class SpriteAtlas:
         return spr
 
     def _road_spr(self, tw: int, th: int, connections: dict[str, bool]) -> pygame.Surface:
+        """
+        Generates the road tile surface with sidewalk outer ring and asphalt core.
+
+        Each connected direction gets a sidewalk + asphalt arm extending to the
+        diamond edge midpoint. Arms are drawn using perpendicular offset vectors
+        (nx, ny) so they stay the correct width regardless of direction.
+        """
         spr = pygame.Surface((tw, th), pygame.SRCALPHA)
         hw, hh = tw // 2, th // 2
         d = _diam_pts(tw, th)
 
-        # Sidewalk (outer ring)
+        # Outer sidewalk (light grey fill of the full diamond).
         sidewalk_c = (158, 155, 142)
         pygame.draw.polygon(spr, sidewalk_c, d)
 
-        # Asphalt core (slightly inset diamond)
+        # Asphalt core as a slightly inset smaller diamond.
         inset = max(2, tw // 14)
         asphalt_c = (54, 58, 65)
         asphalt_d = [(hw, inset), (tw - inset, hh), (hw, th - inset), (inset, hh)]
@@ -918,6 +1053,7 @@ class SpriteAtlas:
 
         if tw >= 14:
             center = (hw, hh)
+            # Midpoints of each diamond edge — road arms run from centre to here.
             edge_mids = {
                 "north": (tw * 3 // 4, th // 4),
                 "east":  (tw * 3 // 4, th * 3 // 4),
@@ -925,13 +1061,14 @@ class SpriteAtlas:
                 "west":  (tw // 4,     th // 4),
             }
             arm = max(2, tw // 10)
-            arm_sw = max(2, arm + 2)  # sidewalk arm slightly wider
+            arm_sw = max(2, arm + 2)  # sidewalk arm slightly wider than asphalt arm
 
             for direction, ep in edge_mids.items():
                 if not connections.get(direction, False):
                     continue
                 dx, dy = ep[0] - center[0], ep[1] - center[1]
                 length = max(1.0, math.sqrt(dx * dx + dy * dy))
+                # Perpendicular unit vector: rotate arm direction 90° for width offset.
                 nx = -dy / length
                 ny =  dx / length
 
@@ -970,9 +1107,9 @@ class SpriteAtlas:
         pygame.draw.polygon(spr, (132, 128, 116), d, max(1, tw // 38))
         return spr
 
-    # ------------------------------------------------------------------ #
-    # Building details                                                     #
-    # ------------------------------------------------------------------ #
+    # ── Building detail layers ─────────────────────────────────────────────────
+    # Each _*_det method adds zone-specific visual details on top of the base
+    # building geometry produced by _building_spr / _civic_spr.
 
     def _res_det(
         self,
@@ -987,6 +1124,7 @@ class SpriteAtlas:
         roof_c: tuple,
         ey: int,
     ) -> None:
+        """Adds a peaked roof, optional chimney, and doorway to a residential building."""
         if tw >= 16:
             # Peaked roof over the top diamond face
             peak = min(ey, max(4, bh // 4))
@@ -1030,6 +1168,7 @@ class SpriteAtlas:
         variant: int,
         ey: int,
     ) -> None:
+        """Adds a flat parapet roof, antenna spire, and rooftop AC unit to a commercial building."""
         # Flat roof with parapet
         if tw >= 16:
             roof_dark = (52, 68, 88)
@@ -1071,6 +1210,7 @@ class SpriteAtlas:
         variant: int,
         ey: int,
     ) -> None:
+        """Adds corrugated roof ridges, smokestacks, and hazard stripes to an industrial building."""
         if tw < 12:
             return
 
@@ -1122,6 +1262,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws park trees with thin pillars suggesting an open pavilion structure."""
         if tw < 12:
             return
         # Park pavilion - no solid walls, just a canopy structure
@@ -1166,6 +1307,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws a slide, A-frame swing set, hanging seat, and sandbox for a playground tile."""
         if tw < 10:
             return
         # Slide ramp across top face (NE to SW)
@@ -1208,6 +1350,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws pitch markings (centre line, circle, goal boxes) and corner flags for a sports field."""
         if tw < 10:
             return
         # White pitch markings on top face
@@ -1250,6 +1393,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws tiered seating lines, a green oval field on the roof, and a scoreboard."""
         if tw < 10:
             return
         # Tiered seating lines on both wall faces
@@ -1294,6 +1438,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws a fairway, sand trap, and flag pin for a golf course tile."""
         if tw < 10:
             return
         # Undulating fairway shading on top face
@@ -1335,6 +1480,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws a swimming pool with lane dividers and a diving board for a pool tile."""
         if tw < 10:
             return
         # Pool water on top face
@@ -1373,6 +1519,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws a lit marquee canopy, neon sign, and film reel detail for a cinema tile."""
         if tw < 10:
             return
         # Marquee canopy on left (SW) face, upper portion
@@ -1429,6 +1576,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws classical columns and a triangular pediment gable for a museum tile."""
         if tw < 10:
             return
         # Classical columns on left (SW) face
@@ -1469,6 +1617,7 @@ class SpriteAtlas:
         stage: int,
         ey: int,
     ) -> None:
+        """Draws fence enclosures, an elephant silhouette, and decorative trees for a zoo tile."""
         if tw < 10:
             return
         # Enclosure fence posts on top face edges
@@ -1524,6 +1673,15 @@ class SpriteAtlas:
         color: tuple,
         ey: int,
     ) -> None:
+        """
+        Adds building-type-specific detail to civic buildings:
+          POWER_PLANT      → red-and-white striped chimney
+          WATER_TOWER      → cylindrical tank on legs
+          HOSPITAL         → red cross on roof + helipad on wall
+          AIRPORT          → runway cross + threshold markings
+        Other civic types (police, fire, school, train, etc.) rely solely on
+        the base _civic_spr geometry and their label text.
+        """
         if building in (BuildingType.POWER_PLANT, BuildingType.LARGE_POWER_PLANT):
             # Red & white striped chimney
             stripe_c = [(210, 60, 50), (240, 240, 240)]
@@ -1622,11 +1780,10 @@ class SpriteAtlas:
                                      (mx, ey + bh // 2 - 1),
                                      (mx + tw // 12, ey + bh // 2 - 1), max(1, tw // 28))
 
-    # ------------------------------------------------------------------ #
-    # Utility helpers                                                      #
-    # ------------------------------------------------------------------ #
+    # ── Utility helpers ────────────────────────────────────────────────────────
 
     def _bh(self, zone: ZoneType, stage: int, level: int, th: int, recreation_type: RecreationType | None = None) -> int:
+        """Returns building height in pixels for a zoned tile based on zone type, stage, and level."""
         if zone == ZoneType.PARK and recreation_type is not None:
             fracs = _REC_BLD_FRACS.get(recreation_type, _BLD_FRACS[ZoneType.PARK])
         else:
@@ -1636,26 +1793,31 @@ class SpriteAtlas:
         return max(4, int(th * frac * mult))
 
     def _civic_bh(self, building: BuildingType, th: int) -> int:
+        """Returns building height in pixels for a civic building based on its height multiplier."""
         frac = _CIVIC_HEIGHT.get(building, 1.6)
         return max(8, int(th * frac))
 
     def _edge_key(self, sn: dict | None) -> tuple | None:
+        """Converts a same-neighbors dict to a 4-tuple for use as a cache key."""
         if sn is None:
             return None
         return (sn.get("north", False), sn.get("east", False),
                 sn.get("south", False), sn.get("west", False))
 
     def _asset(self, name: str, size: int) -> pygame.Surface | None:
+        """Looks up an optional PNG sprite by name and target width; returns None if unavailable."""
         if self.assets is None:
             return None
         return self.assets.get(name, size)
 
     def _building_asset_name(self, zone: ZoneType, stage: int, level: int, variant: int) -> str:
+        """Returns the PNG asset path for a zoned building (e.g. 'buildings/residential_2_1')."""
         if level > 1 and zone in (ZoneType.RESIDENTIAL, ZoneType.COMMERCIAL):
             return f"buildings/{zone.value}_tier2_{stage}_{variant}"
         return f"buildings/{zone.value}_{stage}_{variant}"
 
     def _blit_grounded(self, surface: pygame.Surface, sprite: pygame.Surface, cx: int, cy: int, th: int) -> None:
+        """Blits a sprite so its bottom edge aligns with the tile's south ground-plane edge."""
         surface.blit(sprite, (cx - sprite.get_width() // 2, cy + th - sprite.get_height()))
 
     def draw_fire_overlay(
@@ -1695,6 +1857,7 @@ class SpriteAtlas:
             ])
 
     def _get(self, key: tuple, maker) -> pygame.Surface:
+        """Returns the cached sprite for key, calling maker() to generate it on first access."""
         if key not in self.cache:
             self.cache[key] = maker()
         return self.cache[key]
