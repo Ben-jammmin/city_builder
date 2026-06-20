@@ -23,6 +23,7 @@ draw tinted diamond overlays and the relevant infrastructure.
 
 from __future__ import annotations
 
+import math
 import pygame
 
 from .camera import Camera
@@ -99,6 +100,9 @@ class Renderer:
         self._diam_overlay_size: tuple[int, int] = (0, 0)
         self.minimap_rect: pygame.Rect | None = None
         self.day_night_enabled: bool = False
+        # Vignette overlay surface (rebuilt on viewport size change).
+        self._vignette_surf: pygame.Surface | None = None
+        self._vignette_size: tuple[int, int] = (0, 0)
 
     def draw_map(
         self,
@@ -164,8 +168,11 @@ class Renderer:
         if self.day_night_enabled:
             self._draw_day_night(surface, camera.viewport)
 
+        # Vignette frames the map area with a subtle dark gradient at the edges.
+        self._draw_vignette(surface, camera.viewport)
+
         # Minimap in the top-right corner of the viewport.
-        self._draw_minimap(surface, city_map, camera)
+        self._draw_minimap(surface, city_map, camera, hover_tile)
 
         # Thin border around the map viewport area.
         pygame.draw.rect(surface, (20, 24, 28), camera.viewport, width=2)
@@ -209,6 +216,98 @@ class Renderer:
         self._night_overlay.set_alpha(alpha)
         surface.blit(self._night_overlay, viewport.topleft)
 
+    # ── Water animation ────────────────────────────────────────────────────────
+
+    def _draw_water_anim(
+        self,
+        surface: pygame.Surface,
+        cx: int, cy: int,
+        tw: int, th: int,
+        tile_x: int, tile_y: int,
+    ) -> None:
+        """Draws animated shimmer lines on water tiles, oscillating with time."""
+        if tw < 12:
+            return
+        hw, hh = tw // 2, th // 2
+        tick = pygame.time.get_ticks()
+        # Each tile gets a unique phase offset so ripples don't move in sync.
+        offset_ms = (tile_x * 37 + tile_y * 17) * 400
+
+        if self._diam_overlay_size != (tw, th):
+            self._diam_overlay = pygame.Surface((tw, th), pygame.SRCALPHA)
+            self._diam_overlay_size = (tw, th)
+        self._diam_overlay.fill((0, 0, 0, 0))
+
+        lw = max(1, tw // 22)
+        shimmer = (148, 208, 240)
+
+        for frac, extra_ms in ((0.28, 0), (0.62, 1100)):
+            phase = ((tick + offset_ms + extra_ms) % 2400) / 2400.0
+            anim_off = int(math.sin(phase * math.pi * 2) * (th * 0.07))
+            wy = int(th * frac) + anim_off
+            if wy <= 0 or wy >= th - 1:
+                continue
+            # Clip x range to inside the diamond at this y scanline.
+            if wy <= hh:
+                xl = int(hw * wy / max(1, hh))
+                xr = tw - xl
+            else:
+                xl = int(hw * (th - wy) / max(1, hh))
+                xr = tw - xl
+            if xl >= xr - 1:
+                continue
+            alpha = int(50 + 40 * abs(math.sin(phase * math.pi * 2)))
+            pygame.draw.line(
+                self._diam_overlay, (*shimmer, alpha),
+                (xl + 1, wy), (xr - 1, wy), lw,
+            )
+
+        surface.blit(self._diam_overlay, (cx - hw, cy))
+
+    # ── Vignette ───────────────────────────────────────────────────────────────
+
+    def _draw_vignette(self, surface: pygame.Surface, viewport: pygame.Rect) -> None:
+        """Dark gradient vignette around the map viewport edges for visual depth."""
+        size = (viewport.width, viewport.height)
+        if self._vignette_surf is None or self._vignette_size != size:
+            self._vignette_surf = pygame.Surface(size, pygame.SRCALPHA)
+            self._vignette_surf.fill((0, 0, 0, 0))
+            edge = min(80, size[0] // 7, size[1] // 7)
+            for i in range(edge):
+                a = int(72 * ((edge - i) / edge) ** 2)
+                if a < 1:
+                    continue
+                c = (0, 0, 0, a)
+                w, h = size
+                pygame.draw.line(self._vignette_surf, c, (0, i), (w, i))
+                pygame.draw.line(self._vignette_surf, c, (0, h - 1 - i), (w, h - 1 - i))
+                pygame.draw.line(self._vignette_surf, c, (i, 0), (i, h))
+                pygame.draw.line(self._vignette_surf, c, (w - 1 - i, 0), (w - 1 - i, h))
+            self._vignette_size = size
+        surface.blit(self._vignette_surf, viewport.topleft)
+
+    # ── Zone stakes ────────────────────────────────────────────────────────────
+
+    def _draw_zone_stakes(
+        self,
+        surface: pygame.Surface,
+        cx: int, cy: int,
+        tw: int, th: int,
+        zone: ZoneType,
+    ) -> None:
+        """Shows tiny surveyor-stake dots at the four diamond corners of an undeveloped lot."""
+        hw, hh = tw // 2, th // 2
+        zone_c = COLORS.get(zone.value, (100, 100, 100))
+        stake_c = (
+            min(255, zone_c[0] + 60),
+            min(255, zone_c[1] + 60),
+            min(255, zone_c[2] + 60),
+        )
+        r = max(1, tw // 18)
+        for sx, sy in ((cx, cy), (cx + hw, cy + hh), (cx, cy + th), (cx - hw, cy + hh)):
+            pygame.draw.circle(surface, (16, 18, 20), (sx, sy), r + 1)
+            pygame.draw.circle(surface, stake_c, (sx, sy), r)
+
     # ── Minimap ────────────────────────────────────────────────────────────────
 
     def _minimap_tile_color(self, tile) -> tuple:
@@ -223,7 +322,7 @@ class Renderer:
             return _MINIMAP_COLOR.get(tile.zone.value, _MINIMAP_COLOR["building"])
         return _MINIMAP_COLOR.get(tile.terrain.value, _MINIMAP_COLOR["grass"])
 
-    def _draw_minimap(self, surface: pygame.Surface, city_map, camera) -> None:
+    def _draw_minimap(self, surface: pygame.Surface, city_map, camera, hover_tile=None) -> None:
         """
         Draws a small overview map in the top-right corner of the viewport.
 
@@ -249,14 +348,19 @@ class Renderer:
             self._mm_last_update = now
 
         # Dark background panel behind the minimap.
-        pad = 4
-        bg = pygame.Surface((mm_w + pad * 2, mm_h + pad * 2))
-        bg.fill((8, 10, 14))
-        bg.set_alpha(200)
-        surface.blit(bg, (mm_x - pad, mm_y - pad))
+        pad = 5
+        label_h = 14
+        bg = pygame.Surface((mm_w + pad * 2, mm_h + pad * 2 + label_h))
+        bg.fill((10, 13, 18))
+        bg.set_alpha(215)
+        surface.blit(bg, (mm_x - pad, mm_y - pad - label_h))
+        # "MAP" label above the minimap
+        if self.small_font:
+            lbl = self.small_font.render("MAP", True, (90, 110, 135))
+            surface.blit(lbl, (mm_x, mm_y - pad - label_h + 1))
         surface.blit(self._mm_surf, (mm_x, mm_y))
 
-        self.minimap_rect = pygame.Rect(mm_x - pad, mm_y - pad, mm_w + pad * 2, mm_h + pad * 2)
+        self.minimap_rect = pygame.Rect(mm_x - pad, mm_y - pad - label_h, mm_w + pad * 2, mm_h + pad * 2 + label_h)
 
         try:
             # Draw a white polygon showing the current camera viewport on the minimap.
@@ -276,7 +380,20 @@ class Renderer:
         except Exception:
             pass   # if bounds fail for any reason, skip the viewport indicator
 
-        pygame.draw.rect(surface, (60, 80, 100), (mm_x - pad, mm_y - pad, mm_w + pad * 2, mm_h + pad * 2), 1)
+        # Highlight the hovered tile on the minimap as a bright crosshair dot.
+        if hover_tile is not None:
+            hx, hy = hover_tile
+            hdx = mm_x + int(hx * mm_w / max(1, city_map.width))
+            hdy = mm_y + int(hy * mm_h / max(1, city_map.height))
+            hdx = max(mm_x, min(mm_x + mm_w - 1, hdx))
+            hdy = max(mm_y, min(mm_y + mm_h - 1, hdy))
+            pygame.draw.circle(surface, (255, 255, 100), (hdx, hdy), 2)
+            pygame.draw.circle(surface, (40, 40, 20), (hdx, hdy), 2, 1)
+
+        # Outer border.
+        pygame.draw.rect(surface, (55, 80, 110), (mm_x - pad, mm_y - pad - label_h, mm_w + pad * 2, mm_h + pad * 2 + label_h), 1, border_radius=3)
+        # Inner border just around the map image.
+        pygame.draw.rect(surface, (40, 58, 78), (mm_x - 1, mm_y - 1, mm_w + 2, mm_h + 2), 1)
 
     # ── Per-tile drawing ───────────────────────────────────────────────────────
 
@@ -303,6 +420,10 @@ class Renderer:
             same_nbrs = self._same_terrain_neighbors(city_map, x, y, tile.terrain)
         self.sprites.draw_terrain(surface, cx, cy, tw, th, tile.terrain, x, y, same_nbrs)
 
+        # Animated shimmer on water tiles (drawn above the static sprite).
+        if tile.terrain == TerrainType.WATER:
+            self._draw_water_anim(surface, cx, cy, tw, th, x, y)
+
         # Special view modes draw tinted overlays instead of the normal buildings.
         if view_mode != ViewMode.NORMAL:
             self._draw_view_overlay(surface, city_map, tile, x, y, cx, cy, tw, th, view_mode, rotation, utility_network)
@@ -327,6 +448,9 @@ class Renderer:
             rec_type = tile.recreation_type if tile.zone == ZoneType.PARK else None
             # Draw the coloured base lot.
             self.sprites.draw_zone_base(surface, cx, cy, tw, th, tile.zone, tile.zone_level, rec_type)
+            if tile.development <= 0.05 and tw >= 14:
+                # Undeveloped lot: show small surveyor stakes at diamond corners.
+                self._draw_zone_stakes(surface, cx, cy, tw, th, tile.zone)
             if tile.development > 0.05:
                 # Draw the building that has grown on this lot.
                 self.sprites.draw_building(
@@ -568,6 +692,44 @@ class Renderer:
         pygame.draw.circle(surface, COLORS["building_dark"], center, r + 1)
         pygame.draw.circle(surface, color, center, r)
 
+    # Maps each tool to the colour used for the hover diamond when placement is valid.
+    _TOOL_HOVER_COLORS: dict[str, tuple[int, int, int]] = {
+        "inspect":            (200, 210, 230),
+        "residential":        (85,  200,  95),
+        "dense_residential":  (110, 225, 120),
+        "highrise_residential":(140, 245, 150),
+        "commercial":         (85,  148, 245),
+        "dense_commercial":   (105, 175, 255),
+        "highrise_commercial":(135, 200, 255),
+        "industrial":         (230, 180,  55),
+        "road":               (185, 180, 160),
+        "power_line":         (245, 220,  75),
+        "water_pipe":         (85,  195, 240),
+        "power_plant":        (245, 220,  75),
+        "large_power_plant":  (245, 220,  75),
+        "water_tower":        (85,  195, 240),
+        "large_water_tower":  (85,  195, 240),
+        "police":             (90,  120, 220),
+        "fire":               (225,  90,  75),
+        "school":             (160, 120, 220),
+        "hospital":           (225,  90, 105),
+        "train_station":      (215, 160, 100),
+        "airport":            (110, 168, 225),
+        "park":               (65,  210, 110),
+        "playground":         (240, 135,  55),
+        "sports_field":       (50,  205,  80),
+        "stadium":            (145, 110, 195),
+        "golf_course":        (110, 225, 120),
+        "pool":               (80,  175, 245),
+        "cinema":             (210,  65, 100),
+        "museum":             (215, 200, 155),
+        "zoo":                (180, 135,  70),
+        "bulldoze":           (220,  75,  65),
+    }
+
+    def _tool_hover_color(self, active_tool: Tool) -> tuple[int, int, int]:
+        return self._TOOL_HOVER_COLORS.get(active_tool.value, COLORS["hover_ok"])
+
     def _draw_hover(
         self,
         surface: pygame.Surface,
@@ -577,17 +739,24 @@ class Renderer:
         cx: int, cy: int,
         tw: int, th: int,
     ) -> None:
-        """Draws the diamond outline under the mouse cursor (white if valid, red if blocked)."""
+        """Draws a colored diamond highlight under the cursor (tool color if valid, red if blocked)."""
         x, y   = hover_tile
         tile   = city_map.get(x, y)
         blocked = self._tool_blocked(tile, active_tool)
-        color  = COLORS["hover_blocked"] if blocked else COLORS["hover_ok"]
+        color  = COLORS["hover_blocked"] if blocked else self._tool_hover_color(active_tool)
         hw, hh = tw // 2, th // 2
-        # Drop shadow slightly below and to the right.
-        shadow = [(cx, cy - 1), (cx + hw + 1, cy + hh), (cx, cy + th + 1), (cx - hw - 1, cy + hh)]
-        pygame.draw.polygon(surface, (18, 22, 24), shadow, 2)
-        diam = [(cx, cy), (cx + hw, cy + hh), (cx, cy + th), (cx - hw, cy + hh)]
-        pygame.draw.polygon(surface, color, diam, 3)
+        diam_pts = [(cx, cy), (cx + hw, cy + hh), (cx, cy + th), (cx - hw, cy + hh)]
+        # Translucent fill so the tool color reads on all terrain.
+        if tw >= 8:
+            fill_alpha = 45 if not blocked else 55
+            fill_surf = pygame.Surface((tw, th + 1), pygame.SRCALPHA)
+            pygame.draw.polygon(fill_surf, (*color, fill_alpha), [(hw, 0), (tw, hh), (hw, th), (0, hh)])
+            surface.blit(fill_surf, (cx - hw, cy))
+        # Drop shadow (offset 1 px).
+        shadow = [(cx, cy + 1), (cx + hw + 1, cy + hh + 1), (cx, cy + th + 1), (cx - hw - 1, cy + hh + 1)]
+        pygame.draw.polygon(surface, (12, 16, 20), shadow, 2)
+        # Colored outline (3px).
+        pygame.draw.polygon(surface, color, diam_pts, 3)
 
     def _draw_zone_status_iso(
         self,

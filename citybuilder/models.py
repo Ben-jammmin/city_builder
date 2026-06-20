@@ -19,6 +19,7 @@ from .settings import (
     STARTING_MONEY,
     STARTING_TAX_RATE,
     STARTING_YEAR,
+    BOND_OPTIONS,
 )
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -484,6 +485,16 @@ class CityStats:
     exp_utilities: int = 0
     exp_buildings: int = 0
     exp_recreation: int = 0
+    # Citizen satisfaction score (0-100), computed monthly from utilities/services/tax/pollution.
+    approval_rating: int = 75
+    # Previous-month demand values; used by the UI to show ▲/▼ trend arrows.
+    prev_demand_residential: int = 50
+    prev_demand_commercial: int = 50
+    prev_demand_industrial: int = 50
+    # Active municipal bonds — list of {amount, monthly_payment, months_left}.
+    bonds: list = field(default_factory=list)
+    # Monthly bond-payment expense (shown in budget breakdown).
+    exp_bonds: int = 0
     # The advisor message feed — last 5 messages are kept.
     messages: list[str] = field(default_factory=lambda: ["Game starts paused. Press Space or Run."])
     # Last 12 months of (revenue, expenses) pairs for the budget trend display.
@@ -519,6 +530,27 @@ class CityStats:
     def add_city_message(self, message: str) -> None:
         """Adds a simulation event message prefixed with the current in-game date."""
         self.add_message(f"Y{self.year} M{self.month}: {message}")
+
+    @property
+    def total_bond_debt(self) -> int:
+        """Total future payments remaining across all active bonds."""
+        return sum(b["monthly_payment"] * b["months_left"] for b in self.bonds)
+
+    def issue_bond(self, option_index: int) -> bool:
+        """
+        Issues a bond from BOND_OPTIONS by index.  Adds cash immediately and
+        registers the monthly payment schedule.  Returns True on success.
+        """
+        if option_index < 0 or option_index >= len(BOND_OPTIONS):
+            return False
+        opt = BOND_OPTIONS[option_index]
+        self.money += opt["amount"]
+        self.bonds.append({
+            "amount": opt["amount"],
+            "monthly_payment": opt["monthly_payment"],
+            "months_left": opt["months"],
+        })
+        return True
 
     def demand_for(self, zone: ZoneType) -> int:
         """Returns the current demand value (0-100) for the given zone type."""

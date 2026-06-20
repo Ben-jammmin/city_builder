@@ -24,6 +24,7 @@ from .models import TOOL_LABELS, Tool, ViewMode
 from .settings import (
     COLORS,
     COMMAND_BAR_HEIGHT,
+    HIGH_RISK_THRESHOLD,
     MINIMIZED_COMMAND_BAR_HEIGHT,
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
@@ -220,7 +221,7 @@ class Sidebar:
 
         # Centre column: menu tabs + tool buttons.
         tab_bottom = self.panels.draw_menu_tabs(surface, center_x, content_y, center_w, active_menu)
-        self.panels.draw_tool_buttons(surface, center_x, tab_bottom + 2, center_w, active_tool, active_menu)
+        self.panels.draw_tool_buttons(surface, center_x, tab_bottom + 2, center_w, active_tool, active_menu, stats.money)
 
         # Status column: demand bars + system panel.
         demand_bottom = self.panels.draw_demand_panel(surface, stats, status_x, content_y, status_w)
@@ -248,7 +249,7 @@ class Sidebar:
     def _draw_tile_compact(self, surface: pygame.Surface, city_map: CityMap, hover_tile, x: int, y: int, width: int) -> int:
         """Draws a small panel showing stats for the tile under the mouse cursor."""
         panel_h = 116
-        panel = self.panels._panel(surface, x, y, width, panel_h)
+        panel = self.panels._panel(surface, x, y, width, panel_h, accent_color=(140, 160, 175))
         self.panels._draw_text(surface, "Tile", panel.x + 10, panel.y + 8, self.font)
         if hover_tile is None:
             self.panels._draw_text(surface, "Move over the map", panel.x + 10, panel.y + 34, self.font_small, COLORS["muted_text"])
@@ -281,20 +282,63 @@ class Sidebar:
                                panel.x + 10, panel.y + 88, self.font_small, status_color)
         return panel.bottom
 
+    def _city_status_line(self, stats) -> tuple[str, tuple]:
+        """Returns (text, color) for the single most critical city issue right now."""
+        if stats.money < 0:
+            return "In debt — reduce expenses", COLORS["money_bad"]
+        unpowered = getattr(stats, "unpowered_zones", 0)
+        unwatered = getattr(stats, "unwatered_zones", 0)
+        fire_uncov = getattr(stats, "fire_uncovered_zones", 0)
+        avg_fire   = getattr(stats, "average_fire_risk", 0)
+        avg_crime  = getattr(stats, "average_crime_risk", 0)
+        if unpowered > 0:
+            return f"{unpowered} zone(s) without power", COLORS["money_bad"]
+        if unwatered > 0:
+            return f"{unwatered} zone(s) without water", COLORS["money_bad"]
+        if fire_uncov > 0 or avg_fire >= HIGH_RISK_THRESHOLD:
+            return "Fire risk — add fire stations", (230, 140, 60)
+        if avg_crime >= HIGH_RISK_THRESHOLD:
+            return "High crime — add police stations", (230, 140, 60)
+        delta = getattr(stats, "last_population_delta", 0)
+        if delta > 200:
+            return f"City booming! +{delta} residents", COLORS["money_good"]
+        if delta > 0:
+            return f"Growing steadily (+{delta})", COLORS["money_good"]
+        if stats.population == 0:
+            return "Zone land and connect utilities", COLORS["muted_text"]
+        return "City running smoothly", COLORS["money_good"]
+
     def _draw_advisor_compact(self, surface: pygame.Surface, stats, x: int, y: int, width: int, height: int) -> int:
-        """Draws the last two advisor messages in a small panel."""
-        if height < 70:
+        """Draws the most recent advisor messages in a small panel (newest first)."""
+        if height < 50:
             return y
-        panel = self.panels._panel(surface, x, y, width, height)
+        panel = self.panels._panel(surface, x, y, width, height, accent_color=(140, 105, 188))
         self.panels._draw_text(surface, "Advisor", panel.x + 10, panel.y + 8, self.font)
-        line_y = panel.y + 34
-        for message in stats.messages[-2:]:
+        # Status summary line (most critical issue) just below the title separator.
+        status_text, status_color = self._city_status_line(stats)
+        status_surf = self.font_small.render(
+            fit_label(status_text, self.font_small, width - 22), True, status_color
+        )
+        surface.blit(status_surf, (panel.x + 10, panel.y + 28))
+        line_y = panel.y + 48
+        # Show most recent messages first; each message gets one line (truncated) or two (wrapped).
+        for message in reversed(stats.messages[-8:]):
             is_event = "★" in message
-            self.panels._draw_wrapped_text(surface, message, panel.x + 10, line_y, width - 20,
-                                           color=COLORS["money_good"] if is_event and "ended" not in message
-                                           else (COLORS["muted_text"] if not is_event else COLORS["muted_text"]))
-            line_y += 34
-            if line_y > panel.bottom - 18:
+            if is_event and "ended" not in message:
+                msg_color = COLORS["money_good"]
+            elif "fire" in message.lower() or "crime incident" in message.lower():
+                msg_color = COLORS["money_bad"]
+            elif "autosaved" in message.lower() or "saved" in message.lower():
+                msg_color = (130, 155, 175)
+            else:
+                msg_color = COLORS["muted_text"]
+            self.panels._draw_wrapped_text(surface, message, panel.x + 10, line_y, width - 20, color=msg_color)
+            # Check if message wrapped to 2 lines.
+            if self.font_small.size(message)[0] > width - 20:
+                line_y += 32
+            else:
+                line_y += 18
+            if line_y > panel.bottom - 16:
                 break
         return panel.bottom
 

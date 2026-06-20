@@ -28,11 +28,13 @@ Key design decisions
 from __future__ import annotations
 
 import copy
+import math
 import pygame
 
 from .camera import Camera
 from .city_map import CityMap
 from .models import (
+    MENU_ORDER,
     RECREATION_LABELS,
     TOOL_HOTKEYS,
     TOOL_LABELS,
@@ -52,9 +54,10 @@ from .models import (
 )
 from .renderer import Renderer
 from .save_load import load_game, most_recent_slot, save_game, slot_path
-from .game_overlays import SaveOverlay, HelpOverlay
+from .game_overlays import BondOverlay, HelpOverlay, SaveOverlay
 from .menu_config import GameConfig
 from .settings import (
+    BOND_OPTIONS,
     BUILDING_COST,
     BULLDOZE_COST,
     COLORS,
@@ -71,6 +74,9 @@ from .settings import (
     WINDOW_WIDTH,
     HIGHRISE_MIN_DEVELOPMENT,
     HIGHRISE_MIN_LAND_VALUE,
+    AUTOSAVE_INTERVAL_YEARS,
+    LOW_MONEY_THRESHOLD,
+    ONBOARDING_TIPS,
     ZONE_COST,
     ZONE_LEVEL_COST_MULTIPLIERS,
     ZONE_LEVEL_LABELS,
@@ -99,6 +105,7 @@ class Game:
 
         self.save_overlay = SaveOverlay()
         self.help_overlay = HelpOverlay()
+        self.bond_overlay = BondOverlay()
         # Undo stack: each entry is (money_before_drag, [(x, y, tile_snapshot), ...]).
         # Capped at 20 entries so memory stays bounded.
         self._undo_stack: list[tuple[int, list[tuple[int, int, object]]]] = []
@@ -142,6 +149,11 @@ class Game:
         self.sounds = SoundManager()
         self._last_sound_msg: str = self.stats.messages[-1] if self.stats.messages else ""
         self._hint_font = pygame.font.SysFont("Segoe UI", 15)
+        self._alert_font = pygame.font.SysFont("Segoe UI", 28, bold=True)
+        self._autosave_last_year: int = self.stats.year
+        self._fill_start: tuple[int, int] | None = None   # tile where Shift+drag started
+        self._fire_flash_until: int = 0   # pygame.time.get_ticks() deadline for fire flash
+        self._toasts: list[dict] = []   # brief on-map notification bubbles
 
     def run(self) -> bool:
         """Run the game loop. Returns True if player quit to desktop, False to return to menu."""
@@ -150,6 +162,7 @@ class Game:
             self._handle_events()
             self._handle_keyboard_camera(dt)
             self.simulation.update(dt, self._sim_speed)
+            self._check_autosave()
             self.pedestrian_system.update(dt, self.map.width, self.map.height, self.stats.population, 0.002)
             self._check_message_sounds()
             self._draw()
@@ -185,10 +198,14 @@ class Game:
     def _handle_keydown(self, event: pygame.event.Event) -> None:
         """Handles keyboard shortcuts: Escape, F1/F5/F9, F11, Ctrl+Z, Space, Q/E, V, +/-, WASD, hotkeys."""
         if event.key == pygame.K_ESCAPE:
-            if self.save_overlay.visible:
+            if self._fill_start is not None:
+                self._fill_start = None
+            elif self.save_overlay.visible:
                 self.save_overlay.close()
             elif self.help_overlay.visible:
                 self.help_overlay.close()
+            elif self.bond_overlay.visible:
+                self.bond_overlay.close()
             else:
                 self.running = False
         elif event.key == pygame.K_F1:
@@ -221,6 +238,21 @@ class Game:
             self.camera.rotate_ccw()
         elif event.key == pygame.K_e:
             self.camera.rotate_cw()
+        elif event.key == pygame.K_b:
+            if self.bond_overlay.visible:
+                self.bond_overlay.close()
+            else:
+                self.bond_overlay.open()
+        elif event.key == pygame.K_HOME:
+            self.camera._recenter()
+        elif event.key == pygame.K_n:
+            self.renderer.day_night_enabled = not self.renderer.day_night_enabled
+            self.stats.add_message(
+                "Night cycle on." if self.renderer.day_night_enabled else "Night cycle off."
+            )
+        elif event.key == pygame.K_TAB:
+            idx = MENU_ORDER.index(self.active_menu) if self.active_menu in MENU_ORDER else 0
+            self.active_menu = MENU_ORDER[(idx + 1) % len(MENU_ORDER)]
         else:
             key_name = pygame.key.name(event.key)
             if key_name in TOOL_HOTKEYS:
@@ -301,6 +333,14 @@ class Game:
         """Handles MOUSEBUTTONDOWN: save overlay, help overlay, minimap click, sidebar, or map painting."""
         if self.help_overlay.visible:
             return
+        if self.bond_overlay.visible:
+            if event.button == 1:
+                result = self.bond_overlay.handle_click(event.pos)
+                if result == "cancel":
+                    self.bond_overlay.close()
+                elif isinstance(result, int):
+                    self._issue_bond(result)
+            return
         if self.save_overlay.visible:
             if event.button == 1:
                 result = self.save_overlay.handle_click(event.pos)
@@ -328,11 +368,14 @@ class Game:
             return
 
         if event.button == 1:
-            self.painting = True
-            self.painted_this_drag.clear()
-            self._undo_money_before = self.stats.money
-            self._current_undo_group = []
-            self._apply_tool_at_mouse(event.pos)
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT and self.active_tool not in (Tool.INSPECT, Tool.BULLDOZE):
+                self._fill_start = self._mouse_tile(event.pos)
+            else:
+                self.painting = True
+                self.painted_this_drag.clear()
+                self._undo_money_before = self.stats.money
+                self._current_undo_group = []
+                self._apply_tool_at_mouse(event.pos)
         elif event.button == 2:
             self.dragging_camera = True
         elif event.button == 3:
@@ -344,6 +387,11 @@ class Game:
 
     def _handle_mouse_up(self, event: pygame.event.Event) -> None:
         """Ends the current painting or camera-drag drag when the mouse button is released."""
+        if event.button == 1 and self._fill_start is not None:
+            end_tile = self.hover_tile or self._fill_start
+            self._apply_rectangle_fill(self._fill_start, end_tile)
+            self._fill_start = None
+            return
         if event.button in (1, 3):
             self.painting = False
             # Commit the undo group collected during this drag.
@@ -424,7 +472,10 @@ class Game:
         if tile_pos is None or tile_pos in self.painted_this_drag:
             return
         self.painted_this_drag.add(tile_pos)
+        self._apply_tool_at_tile(tile_pos)
 
+    def _apply_tool_at_tile(self, tile_pos: tuple[int, int]) -> None:
+        """Applies the active tool to the given tile position."""
         if self.active_tool == Tool.INSPECT:
             return
         if self.active_tool == Tool.BULLDOZE:
@@ -685,6 +736,22 @@ class Game:
 
     # ── Utility helpers ────────────────────────────────────────────────────────
 
+    def _issue_bond(self, option_index: int) -> None:
+        """Issues a municipal bond by index from BOND_OPTIONS and closes the overlay."""
+        opt = BOND_OPTIONS[option_index]
+        self.stats.issue_bond(option_index)
+        self.stats.add_city_message(
+            f"Issued ${opt['amount']:,} bond. "
+            f"${opt['monthly_payment']:,}/mo for {opt['months']} months "
+            f"(+${opt['monthly_payment'] * opt['months'] - opt['amount']:,} interest)."
+        )
+        self.bond_overlay.close()
+        self._add_toast(
+            f"Bond issued: +${opt['amount']:,} cash",
+            color=(220, 190, 60),
+            duration_ms=4000,
+        )
+
     def _can_afford(self, cost: int) -> bool:
         """Returns True if the player has enough money; shows a message and returns False if not."""
         if self.stats.money < cost:
@@ -736,10 +803,142 @@ class Game:
         ml = latest.lower()
         if "fire outbreak" in ml:
             self.sounds.play("fire")
+            self.stats.paused = True
+            self._fire_flash_until = pygame.time.get_ticks() + 3500
         elif "milestone" in ml:
             self.sounds.play("milestone")
+            self._add_toast(latest, color=(225, 205, 70), duration_ms=6000)
         elif "crime incident" in ml:
             self.sounds.play("crime")
+        elif "★" in latest:
+            color = COLORS["money_bad"] if any(w in ml for w in ("recession","drought","fine","scandal","wave","closure")) else COLORS["money_good"]
+            self._add_toast(latest[:72], color=color, duration_ms=5000)
+        elif "autosaved" in ml:
+            self._add_toast(latest, color=(115, 140, 165), duration_ms=2000)
+
+    def _add_toast(self, text: str, color: tuple = (235, 239, 242), duration_ms: int = 3500) -> None:
+        """Queues a brief notification bubble on the map area."""
+        self._toasts.append({"text": text, "color": color, "expire": pygame.time.get_ticks() + duration_ms})
+        if len(self._toasts) > 4:
+            self._toasts = self._toasts[-4:]
+
+    def _draw_toasts(self) -> None:
+        """Draws fading notification bubbles near the top-right of the map viewport."""
+        now = pygame.time.get_ticks()
+        self._toasts = [t for t in self._toasts if t["expire"] > now]
+        vp = self.camera.viewport
+        ty = vp.y + 52   # below the minimap area
+        font = self._hint_font
+        for toast in self._toasts:
+            remaining = toast["expire"] - now
+            alpha = min(255, int(255 * remaining / 600)) if remaining < 600 else 255
+            color = toast["color"]
+            rendered = font.render(toast["text"], True, color)
+            bw = min(rendered.get_width() + 24, vp.width - 20)
+            bx = vp.right - bw - 10
+            bh = rendered.get_height() + 12
+            bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
+            bg.fill((14, 18, 24, min(210, alpha)))
+            pygame.draw.rect(bg, (*color, min(160, alpha)), bg.get_rect(), 1, border_radius=6)
+            self.screen.blit(bg, (bx, ty))
+            # Clip the text to the bubble width.
+            text_surf = pygame.Surface((bw - 24, rendered.get_height()), pygame.SRCALPHA)
+            text_surf.blit(rendered, (0, 0))
+            text_surf.set_alpha(alpha)
+            self.screen.blit(text_surf, (bx + 12, ty + 6))
+            ty += bh + 6
+
+    def _draw_pause_indicator(self) -> None:
+        """Shows a subtle 'PAUSED' watermark in the top-left of the map viewport when paused."""
+        if not self.stats.paused:
+            return
+        vp = self.camera.viewport
+        t = pygame.time.get_ticks()
+        alpha = int(140 + 70 * abs(math.sin(t / 800.0)))
+        rendered = self._hint_font.render("⏸  PAUSED  —  Press Space to resume", True, (200, 210, 230))
+        sw = self.screen.get_width()
+        rx = (sw - rendered.get_width()) // 2
+        ry = vp.bottom - 44
+        bg = pygame.Surface((rendered.get_width() + 22, rendered.get_height() + 10), pygame.SRCALPHA)
+        bg.fill((12, 16, 22, min(200, alpha)))
+        pygame.draw.rect(bg, (80, 95, 120, min(160, alpha)), bg.get_rect(), 1, border_radius=6)
+        self.screen.blit(bg, (rx - 11, ry - 5))
+        rendered.set_alpha(alpha)
+        self.screen.blit(rendered, (rx, ry))
+
+    def _draw_fill_preview(self) -> None:
+        """Draws a green diamond highlight over every tile in the Shift+drag rectangle."""
+        if self._fill_start is None or self.hover_tile is None:
+            return
+        x0, y0 = self._fill_start
+        x1, y1 = self.hover_tile
+        min_x, max_x = min(x0, x1), max(x0, x1)
+        min_y, max_y = min(y0, y1), max(y0, y1)
+        tw = max(4, int(self.camera.tile_w * self.camera.zoom))
+        th = max(2, int(self.camera.tile_h * self.camera.zoom))
+        hw, hh = tw // 2, th // 2
+        old_clip = self.screen.get_clip()
+        self.screen.set_clip(self.camera.viewport)
+        fill_surf = pygame.Surface((tw, th + 1), pygame.SRCALPHA)
+        pygame.draw.polygon(fill_surf, (90, 220, 130, 70), [(hw, 0), (tw, hh), (hw, th), (0, hh)])
+        for rx in range(min_x, max_x + 1):
+            for ry in range(min_y, max_y + 1):
+                if self.map.in_bounds(rx, ry):
+                    cx, cy = self.camera.world_to_screen(rx, ry)
+                    self.screen.blit(fill_surf, (cx - hw, cy))
+                    diam = [(cx, cy), (cx + hw, cy + hh), (cx, cy + th), (cx - hw, cy + hh)]
+                    pygame.draw.polygon(self.screen, (110, 240, 150), diam, 2)
+        self.screen.set_clip(old_clip)
+
+    def _draw_onboarding_tip(self) -> None:
+        """Shows a contextual tip bubble during the first in-game year."""
+        tip = next(
+            (msg for yr, mo, msg in ONBOARDING_TIPS if yr == self.stats.year and mo == self.stats.month),
+            None,
+        )
+        if tip is None:
+            return
+        rendered = self._hint_font.render(tip, True, (230, 210, 110))
+        sw = self.screen.get_width()
+        bar_h = self.sidebar.current_height()
+        tip_y = self.screen.get_height() - bar_h - 46
+        bg = pygame.Rect(
+            sw // 2 - rendered.get_width() // 2 - 14, tip_y - 6,
+            rendered.get_width() + 28, 32,
+        )
+        pygame.draw.rect(self.screen, (28, 34, 38), bg, border_radius=8)
+        pygame.draw.rect(self.screen, (180, 155, 45), bg, 1, border_radius=8)
+        self.screen.blit(rendered, (bg.x + 14, bg.y + 8))
+
+    def _draw_fire_flash(self) -> None:
+        """Draws a red alert overlay for 3.5 seconds after a fire outbreak."""
+        remaining = self._fire_flash_until - pygame.time.get_ticks()
+        if remaining <= 0:
+            return
+        frac = min(1.0, remaining / 3500.0)
+        alpha = int(50 * frac)
+        w, h = self.screen.get_size()
+        flash_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        flash_surf.fill((220, 60, 20, alpha))
+        self.screen.blit(flash_surf, (0, 0))
+        rendered = self._alert_font.render("FIRE OUTBREAK — Simulation Paused", True, (255, 120, 40))
+        rx = (w - rendered.get_width()) // 2
+        ry = max(60, self.camera.viewport.height // 2 - 30)
+        bg = pygame.Rect(rx - 18, ry - 12, rendered.get_width() + 36, rendered.get_height() + 24)
+        pygame.draw.rect(self.screen, (40, 18, 10), bg, border_radius=10)
+        pygame.draw.rect(self.screen, (220, 80, 30), bg, 2, border_radius=10)
+        self.screen.blit(rendered, (rx, ry))
+
+    def _draw_low_money_warning(self) -> None:
+        """Draws a pulsing red border around the screen when the city is in debt."""
+        if self.stats.money >= 0:
+            return
+        t = pygame.time.get_ticks()
+        alpha = int(55 + 45 * abs(math.sin(t / 500.0)))
+        w, h = self.screen.get_size()
+        border_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.rect(border_surf, (220, 40, 40, alpha), border_surf.get_rect(), 16)
+        self.screen.blit(border_surf, (0, 0))
 
     def _jump_camera_minimap(self, pos: tuple[int, int]) -> None:
         """
@@ -785,6 +984,37 @@ class Game:
             return None
         return tile_pos
 
+    def _check_autosave(self) -> None:
+        """Saves to slot 0 (autosave) every AUTOSAVE_INTERVAL_YEARS in-game years."""
+        if self.stats.year - self._autosave_last_year >= AUTOSAVE_INTERVAL_YEARS:
+            self._autosave_last_year = self.stats.year
+            try:
+                save_game(self.map, self.stats, slot_path(0))
+                self.stats.add_message(f"Autosaved (Year {self.stats.year}).")
+            except Exception:
+                pass
+
+    def _apply_rectangle_fill(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        """Applies the active tool to every tile in the bounding box from start to end."""
+        x0, y0 = start
+        x1, y1 = end
+        min_x, max_x = min(x0, x1), max(x0, x1)
+        min_y, max_y = min(y0, y1), max(y0, y1)
+        self._undo_money_before = self.stats.money
+        self._current_undo_group = []
+        self.painted_this_drag.clear()
+        for rx in range(min_x, max_x + 1):
+            for ry in range(min_y, max_y + 1):
+                if self.map.in_bounds(rx, ry) and (rx, ry) not in self.painted_this_drag:
+                    self.painted_this_drag.add((rx, ry))
+                    self._apply_tool_at_tile((rx, ry))
+        if self._current_undo_group:
+            self._undo_stack.append((self._undo_money_before, self._current_undo_group))
+            self._current_undo_group = []
+            if len(self._undo_stack) > 20:
+                self._undo_stack.pop(0)
+        self.painted_this_drag.clear()
+
     # ── Drawing ────────────────────────────────────────────────────────────────
 
     def _draw(self) -> None:
@@ -800,6 +1030,9 @@ class Game:
             self.hover_tile,
             self.pedestrian_system,
         )
+        self._draw_fill_preview()
+        self._draw_toasts()
+        self._draw_pause_indicator()
         self.sidebar.draw(
             self.screen,
             self.stats,
@@ -811,31 +1044,61 @@ class Game:
             self.hover_tile,
         )
         self._draw_top_hint()
+        self._draw_onboarding_tip()
+        self._draw_fire_flash()
+        if self.bond_overlay.visible:
+            self.bond_overlay.draw(self.screen, self.stats)
         if self.save_overlay.visible:
             self.save_overlay.draw(self.screen)
         if self.help_overlay.visible:
             self.help_overlay.draw(self.screen)
+        self._draw_low_money_warning()
         pygame.display.flip()
 
     def _draw_top_hint(self) -> None:
-        """Draws the thin toolbar at the top of the screen showing active tool, view, hotkeys, and cost preview."""
+        """Draws a compact HUD bar at the top: active tool, cost, view, speed, date."""
         font = self._hint_font
         speed_label = SIM_SPEED_PRESETS[self._speed_index][0]
+        paused_str = "⏸ PAUSED" if self.stats.paused else speed_label
 
-        cost_text = ""
-        if self.hover_tile is not None and self.active_tool not in (Tool.INSPECT, Tool.BULLDOZE):
+        # Active tool + cost (only when hovering over the map).
+        tool_str = TOOL_LABELS[self.active_tool]
+        cost_str = ""
+        if self.active_tool not in (Tool.INSPECT, Tool.BULLDOZE):
             cost = self._preview_cost()
             if cost > 0:
                 can_afford = self.stats.money >= cost
-                cost_text = f" | Cost: ${cost:,}" + ("" if can_afford else " (need more money)")
+                cost_str = f"  ${cost:,}/tile" + (" ✗" if not can_afford else "")
 
-        text = (
-            f"{TOOL_LABELS[self.active_tool]} tool | {VIEW_LABELS[self.view_mode]} view | "
-            f"Speed: {speed_label} [ / ] | V view | Q/E rotate | WASD pan | Scroll zoom"
-            f" | F5 save | F9 load | Ctrl+Z undo | F1 help | Esc"
-            + cost_text
-        )
-        rendered = font.render(text, True, COLORS["text"])
+        fill_str = "  [Shift+drag — filling rect]" if self._fill_start is not None else ""
+
+        tile_str = ""
+        if self.hover_tile is not None:
+            hx, hy = self.hover_tile
+            tile_str = f"({hx},{hy})"
+
+        parts = [
+            tool_str + cost_str + fill_str,
+            f"{VIEW_LABELS[self.view_mode]} view",
+            f"Y{self.stats.year} M{self.stats.month}",
+            paused_str,
+        ]
+        if tile_str:
+            parts.append(tile_str)
+        parts.append("F1 help")
+        text = "  ·  ".join(parts)
+
+        if self.stats.money < 0:
+            text_color = COLORS["money_bad"]
+        elif cost_str.endswith("✗"):
+            text_color = (230, 130, 50)
+        elif self.stats.money < LOW_MONEY_THRESHOLD:
+            text_color = (230, 190, 70)
+        else:
+            text_color = COLORS["text"]
+
+        rendered = font.render(text, True, text_color)
         bg = pygame.Rect(12, 12, rendered.get_width() + 18, rendered.get_height() + 10)
-        pygame.draw.rect(self.screen, (25, 30, 34), bg, border_radius=6)
+        pygame.draw.rect(self.screen, (20, 25, 30), bg, border_radius=6)
+        pygame.draw.rect(self.screen, (45, 55, 70), bg, 1, border_radius=6)
         self.screen.blit(rendered, (bg.x + 9, bg.y + 5))

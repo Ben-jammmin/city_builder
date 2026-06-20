@@ -9,7 +9,7 @@ from __future__ import annotations
 import pygame
 
 from .save_load import list_saves
-from .settings import NUM_SAVE_SLOTS
+from .settings import BOND_OPTIONS, NUM_SAVE_SLOTS
 
 
 class SaveOverlay:
@@ -137,15 +137,18 @@ class HelpOverlay:
             ("Scroll wheel",  "Zoom in / out"),
             ("Middle drag",   "Pan the map"),
             ("Q / E",         "Rotate camera"),
+            ("Home",          "Re-center camera on map"),
             ("V",             "Cycle view mode (Power/Water/Fire/Police/Terrain/Traffic/Land Value/Pollution)"),
+            ("N",             "Toggle day/night cycle"),
+            ("Tab",           "Cycle to next menu tab"),
             ("[ / ]",         "Slower / faster simulation speed"),
             ("Space",         "Pause / resume"),
         ]),
         ("Building", [
-            ("Left click",  "Place active tool"),
-            ("Right click", "Bulldoze tile"),
-            ("Drag",        "Paint multiple tiles"),
-            ("Ctrl+Z",      "Undo last action"),
+            ("Left click",       "Place active tool"),
+            ("Shift + drag",     "Fill rectangle with active tool"),
+            ("Right click/drag", "Bulldoze tiles"),
+            ("Ctrl+Z",           "Undo last action"),
             ("1",  "Residential zone"),
             ("2",  "Commercial zone"),
             ("3",  "Industrial zone"),
@@ -157,11 +160,13 @@ class HelpOverlay:
             ("9",  "Bulldoze"),
         ]),
         ("Other", [
-            ("F5",  "Save game"),
-            ("F9",  "Load game"),
-            ("F11", "Toggle fullscreen"),
-            ("F1",  "This help screen"),
-            ("Esc", "Close overlay / quit to menu"),
+            ("F5",      "Save game (manual)"),
+            ("F9",      "Load game"),
+            ("Auto",    "Game autosaves every 2 in-game years to slot 0"),
+            ("B",       "Open bond / loan menu (finance city expansion)"),
+            ("F11",     "Toggle fullscreen"),
+            ("F1",      "This help screen"),
+            ("Esc",     "Close overlay / quit to menu"),
         ]),
     ]
 
@@ -220,3 +225,121 @@ class HelpOverlay:
                 cy[col] += 18
 
             cy[col] += 8
+
+
+class BondOverlay:
+    """
+    Full-screen dimmed overlay for issuing municipal bonds.
+
+    Shows the three preset bond options plus a summary of any currently
+    active bonds.  Opened with the B key; closed with B, Escape, or Cancel.
+    """
+
+    def __init__(self) -> None:
+        self.visible = False
+        self._option_rects: list[pygame.Rect] = []
+        self._cancel_rect = pygame.Rect(0, 0, 0, 0)
+        self._font:    pygame.font.Font | None = None
+        self._font_sm: pygame.font.Font | None = None
+
+    def open(self) -> None:
+        self.visible = True
+
+    def close(self) -> None:
+        self.visible = False
+
+    def _ensure_fonts(self) -> None:
+        if self._font is None:
+            self._font    = pygame.font.SysFont("Segoe UI", 18, bold=True)
+            self._font_sm = pygame.font.SysFont("Segoe UI", 15)
+
+    def draw(self, surface: pygame.Surface, stats) -> None:
+        self._ensure_fonts()
+        W, H = surface.get_size()
+
+        dim = pygame.Surface((W, H), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 170))
+        surface.blit(dim, (0, 0))
+
+        panel_w = min(540, W - 40)
+        opt_h   = 58
+        active_section_h = 0
+        bonds = getattr(stats, "bonds", [])
+        if bonds:
+            active_section_h = 14 + len(bonds) * 18 + 8
+
+        panel_h = 56 + active_section_h + len(BOND_OPTIONS) * (opt_h + 8) + 52
+        panel   = pygame.Rect(W // 2 - panel_w // 2, H // 2 - panel_h // 2, panel_w, panel_h)
+        pygame.draw.rect(surface, (18, 24, 32), panel, border_radius=10)
+        pygame.draw.rect(surface, (55, 90, 130), panel, width=2, border_radius=10)
+
+        title = self._font.render("Municipal Bonds  [B or Esc to close]", True, (235, 239, 242))
+        surface.blit(title, (panel.centerx - title.get_width() // 2, panel.y + 14))
+
+        row_y = panel.y + 44
+        mouse = pygame.mouse.get_pos()
+
+        # ── Active bonds summary ───────────────────────────────────────────────
+        if bonds:
+            total_debt  = sum(b["monthly_payment"] * b["months_left"] for b in bonds)
+            monthly_pay = sum(b["monthly_payment"] for b in bonds)
+            hdr = self._font_sm.render(
+                f"Active bonds — ${monthly_pay:,}/mo  ·  ${total_debt:,} remaining total",
+                True, (220, 165, 55))
+            surface.blit(hdr, (panel.x + 18, row_y))
+            row_y += 18
+            for b in bonds:
+                remaining_cost = b["monthly_payment"] * b["months_left"]
+                ln = self._font_sm.render(
+                    f"  ${b['amount']:,} bond  ·  {b['months_left']} months left  ·  ${remaining_cost:,} remaining",
+                    True, (160, 175, 185))
+                surface.blit(ln, (panel.x + 18, row_y))
+                row_y += 18
+            row_y += 8
+
+        # ── Bond options ───────────────────────────────────────────────────────
+        self._option_rects = []
+        for opt in BOND_OPTIONS:
+            total_cost  = opt["monthly_payment"] * opt["months"]
+            interest    = total_cost - opt["amount"]
+            opt_rect    = pygame.Rect(panel.x + 18, row_y, panel_w - 36, opt_h)
+            self._option_rects.append(opt_rect)
+
+            hovered = opt_rect.collidepoint(mouse)
+            bg      = (38, 54, 72) if hovered else (28, 38, 52)
+            border  = (90, 135, 190) if hovered else (55, 82, 112)
+            pygame.draw.rect(surface, bg,     opt_rect, border_radius=6)
+            pygame.draw.rect(surface, border, opt_rect, width=1, border_radius=6)
+
+            name_s = self._font.render(opt["name"], True, (220, 235, 245))
+            surface.blit(name_s, (opt_rect.x + 14, opt_rect.y + 8))
+
+            cash_s = self._font_sm.render(f"+${opt['amount']:,} now", True, (118, 213, 140))
+            surface.blit(cash_s, (opt_rect.x + 14, opt_rect.y + 32))
+
+            pay_s = self._font_sm.render(
+                f"${opt['monthly_payment']:,}/mo  ×  {opt['months']} months  =  ${total_cost:,} total  (+${interest:,} interest)",
+                True, (160, 175, 185))
+            surface.blit(pay_s, (opt_rect.x + 130, opt_rect.y + 32))
+
+            row_y += opt_h + 8
+
+        # ── Cancel button ──────────────────────────────────────────────────────
+        cancel_w = 130
+        self._cancel_rect = pygame.Rect(panel.centerx - cancel_w // 2, panel.bottom - 44, cancel_w, 30)
+        c_hov = self._cancel_rect.collidepoint(mouse)
+        pygame.draw.rect(surface, (48, 60, 76) if c_hov else (36, 46, 58),
+                         self._cancel_rect, border_radius=5)
+        pygame.draw.rect(surface, (60, 76, 96), self._cancel_rect, width=1, border_radius=5)
+        ct = self._font_sm.render("Cancel  [Esc / B]", True, (200, 212, 224))
+        surface.blit(ct, (self._cancel_rect.centerx - ct.get_width() // 2,
+                          self._cancel_rect.centery - ct.get_height() // 2))
+
+    def handle_click(self, pos: tuple[int, int]) -> int | str | None:
+        """Returns a bond option index (0-N), 'cancel', or None on no match."""
+        if self._cancel_rect.collidepoint(pos):
+            return "cancel"
+        for i, rect in enumerate(self._option_rects):
+            if rect.collidepoint(pos):
+                return i
+        return None

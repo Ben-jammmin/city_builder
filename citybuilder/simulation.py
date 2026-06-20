@@ -129,6 +129,7 @@ from .settings import (
     POLLUTION_LAND_VALUE_PENALTY,
     POPULATION_MILESTONES,
     ROAD_TRAFFIC_CAPACITY,
+    BOND_OPTIONS,
 )
 from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS
 
@@ -201,9 +202,15 @@ class Simulation:
         previous_population = self.stats.population
         previous_jobs = self.stats.jobs
 
+        # Save demand values before recalculating so the UI can show trend arrows.
+        self.stats.prev_demand_residential = self.stats.demand_residential
+        self.stats.prev_demand_commercial = self.stats.demand_commercial
+        self.stats.prev_demand_industrial = self.stats.demand_industrial
+
         self._update_systems()
         self._update_system_totals()
         self._update_demand()
+        self._update_approval()
         self._update_all_tiles()
 
         # Count totals across all tiles.
@@ -250,11 +257,24 @@ class Simulation:
             for name, cost in BUILDING_MAINTENANCE.items()
         ))
         exp_recreation = int(self.city_map.recreation_maintenance_cost())
-        expenses = exp_roads + exp_utilities + exp_buildings + exp_recreation
+
+        # ── Bond payments ──────────────────────────────────────────────────────
+        exp_bonds = sum(b["monthly_payment"] for b in self.stats.bonds)
+        updated_bonds = []
+        for b in self.stats.bonds:
+            rem = b["months_left"] - 1
+            if rem > 0:
+                updated_bonds.append({**b, "months_left": rem})
+            else:
+                self.stats.add_city_message(f"Bond of ${b['amount']:,} fully repaid.")
+        self.stats.bonds = updated_bonds
+
+        expenses = exp_roads + exp_utilities + exp_buildings + exp_recreation + exp_bonds
         self.stats.exp_roads = exp_roads
         self.stats.exp_utilities = exp_utilities
         self.stats.exp_buildings = exp_buildings
         self.stats.exp_recreation = exp_recreation
+        self.stats.exp_bonds = exp_bonds
 
         self.stats.last_revenue = revenue
         self.stats.last_expenses = expenses
@@ -307,6 +327,8 @@ class Simulation:
                 # Active event growth multipliers.
                 for ev in self.stats.active_events:
                     growth *= ev.get("effects", {}).get("growth_mult", 1.0)
+                # Citizen approval scales growth: 0.7× at 0%, 1.0× at 100%.
+                growth *= 0.7 + self.stats.approval_rating / 333.0
                 # Clamp development at 1.0 (fully built-up).
                 tile.development = min(1.0, tile.development + growth)
             elif highrise_blocked:
@@ -717,6 +739,50 @@ class Simulation:
                 timestamped = f"Y{self.stats.year} M{self.stats.month}: ★ Event ended: {ev['id'].replace('_', ' ').title()}."
                 self.stats.add_message(timestamped)
         self.stats.active_events = still_active
+
+    # ── Citizen approval rating ────────────────────────────────────────────────
+
+    def _average_zoned_pollution(self) -> float:
+        """Average pollution level across all non-empty, non-park zone tiles."""
+        values = [tile.pollution for _, _, tile in self.city_map.iter_tiles()
+                  if tile.zone not in (ZoneType.EMPTY, ZoneType.PARK)]
+        return sum(values) / len(values) if values else 0.0
+
+    def _update_approval(self) -> None:
+        """
+        Computes a 0-100 citizen approval rating from utilities, services, safety,
+        taxes, pollution, and fiscal health.  Affects zone growth speed.
+        """
+        if self.stats.population == 0:
+            self.stats.approval_rating = 75
+            return
+
+        score = 55.0  # neutral baseline
+
+        # Utility satisfaction: full coverage = +12.5 each, zero = -12.5 each.
+        score += (self.stats.power_satisfaction - 50) * 0.25
+        score += (self.stats.water_satisfaction - 50) * 0.25
+
+        # Service coverage: good coverage lifts approval above neutral.
+        score += (self.stats.service_score - 30) * 0.25
+
+        # Safety: high risk hurts approval (0% risk = +0, 100% risk = -12).
+        score -= self.stats.average_fire_risk * 0.12
+        score -= self.stats.average_crime_risk * 0.12
+
+        # Tax rate: neutral at 9%; every point above/below shifts approval ±1.5.
+        score -= (self.stats.tax_rate - 9) * 1.5
+
+        # Pollution: heavily penalises residential quality of life.
+        score -= self._average_zoned_pollution() * 25
+
+        # Debt signals poor management.
+        if self.stats.money < 0:
+            score -= 15
+        elif self.stats.money < 2000:
+            score -= 5
+
+        self.stats.approval_rating = self._clamp_percent(score)
 
     # ── Demand calculation ─────────────────────────────────────────────────────
 

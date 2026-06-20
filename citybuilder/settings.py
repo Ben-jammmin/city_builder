@@ -455,6 +455,32 @@ POPULATION_MILESTONES: list[tuple[int, str, int]] = [
     (100_000, "Megalopolis",300_000),
 ]
 
+# ── Autosave & low-money alert ─────────────────────────────────────────────────
+AUTOSAVE_INTERVAL_YEARS = 2     # save automatically every N in-game years
+LOW_MONEY_THRESHOLD = 2000      # hint bar turns amber below this balance
+
+# ── Onboarding tips ─────────────────────────────────────────────────────────────
+# Shown during year 1 as brief contextual hints at the bottom of the map area.
+# Each tuple: (year, month, message).
+ONBOARDING_TIPS: list[tuple[int, int, str]] = [
+    (1,  1, "Tip: Build Roads first — zones need road access to grow."),
+    (1,  2, "Tip: Place a Power Plant, then run Power Lines to your zones."),
+    (1,  3, "Tip: Build a Water Tower and lay Water Pipes under the roads."),
+    (1,  4, "Tip: Zone Residential (R), Commercial (C), and Industrial (I) near roads."),
+    (1,  5, "Tip: Add Fire Stations and Police Stations to protect your citizens."),
+    (1,  6, "Tip: Press V to cycle view modes and check Power & Water coverage."),
+    (1,  9, "Tip: Hold Shift and drag to fill a rectangle with the active tool."),
+    (1, 12, "Tip: Press +/- to adjust your tax rate and balance revenue vs. growth."),
+]
+
+# ── Municipal bonds ────────────────────────────────────────────────────────────
+# Three preset loan options. amount = immediate cash; monthly_payment × months > amount (interest).
+BOND_OPTIONS: list[dict] = [
+    {"name": "Small Bond",  "amount":  5_000, "months": 12, "monthly_payment":  460},
+    {"name": "Medium Bond", "amount": 15_000, "months": 24, "monthly_payment":  690},
+    {"name": "Large Bond",  "amount": 30_000, "months": 36, "monthly_payment":  960},
+]
+
 # ── Save system ────────────────────────────────────────────────────────────────
 SAVE_DIR = "saves"       # folder relative to the project root
 NUM_SAVE_SLOTS = 5       # how many named save slots exist
