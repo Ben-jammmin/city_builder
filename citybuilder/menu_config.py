@@ -43,10 +43,12 @@ DIFFICULTY_MONEY: dict[str, int] = {
 TERRAIN_STYLES: list[str] = ["Default", "Flat", "Hilly", "Coastal"]
 
 # How many real-world seconds pass per simulated month at each speed.
+# Normal = 5 min/year (25s/month), Fast = 2.5 min/year (12.5s/month)
 SIM_SPEED_SECONDS: dict[str, float] = {
-    "Slow":   2.5,
-    "Normal": 1.25,
-    "Fast":   0.4,
+    "Slow":   50.0,
+    "Normal": 25.0,
+    "Fast":   12.5,
+    "Max":    4.0,
 }
 
 # ── GameConfig ─────────────────────────────────────────────────────────────────

@@ -54,10 +54,11 @@ from .models import (
 )
 from .renderer import Renderer
 from .save_load import load_game, most_recent_slot, save_game, slot_path
-from .game_overlays import BondOverlay, HelpOverlay, SaveOverlay
+from .game_overlays import AnalyticsOverlay, BondOverlay, HelpOverlay, OrdinanceOverlay, SaveOverlay
 from .menu_config import GameConfig
 from .settings import (
     BOND_OPTIONS,
+    ORDINANCES,
     BUILDING_COST,
     BULLDOZE_COST,
     COLORS,
@@ -103,9 +104,11 @@ class Game:
         self.running = True
         self.quit_to_desktop = False   # True = close the app; False = back to menu
 
-        self.save_overlay = SaveOverlay()
-        self.help_overlay = HelpOverlay()
-        self.bond_overlay = BondOverlay()
+        self.save_overlay      = SaveOverlay()
+        self.help_overlay      = HelpOverlay()
+        self.bond_overlay      = BondOverlay()
+        self.ordinance_overlay = OrdinanceOverlay()
+        self.analytics_overlay = AnalyticsOverlay()
         # Undo stack: each entry is (money_before_drag, [(x, y, tile_snapshot), ...]).
         # Capped at 20 entries so memory stays bounded.
         self._undo_stack: list[tuple[int, list[tuple[int, int, object]]]] = []
@@ -206,6 +209,10 @@ class Game:
                 self.help_overlay.close()
             elif self.bond_overlay.visible:
                 self.bond_overlay.close()
+            elif self.ordinance_overlay.visible:
+                self.ordinance_overlay.close()
+            elif self.analytics_overlay.visible:
+                self.analytics_overlay.close()
             else:
                 self.running = False
         elif event.key == pygame.K_F1:
@@ -243,6 +250,16 @@ class Game:
                 self.bond_overlay.close()
             else:
                 self.bond_overlay.open()
+        elif event.key == pygame.K_o:
+            if self.ordinance_overlay.visible:
+                self.ordinance_overlay.close()
+            else:
+                self.ordinance_overlay.open()
+        elif event.key == pygame.K_a and not (event.mod & pygame.KMOD_CTRL):
+            if self.analytics_overlay.visible:
+                self.analytics_overlay.close()
+            else:
+                self.analytics_overlay.open()
         elif event.key == pygame.K_HOME:
             self.camera._recenter()
         elif event.key == pygame.K_n:
@@ -332,6 +349,20 @@ class Game:
     def _handle_mouse_down(self, event: pygame.event.Event) -> None:
         """Handles MOUSEBUTTONDOWN: save overlay, help overlay, minimap click, sidebar, or map painting."""
         if self.help_overlay.visible:
+            return
+        if self.analytics_overlay.visible:
+            if event.button == 1:
+                result = self.analytics_overlay.handle_click(event.pos)
+                if result == "close":
+                    self.analytics_overlay.close()
+            return
+        if self.ordinance_overlay.visible:
+            if event.button == 1:
+                result = self.ordinance_overlay.handle_click(event.pos)
+                if result == "close":
+                    self.ordinance_overlay.close()
+                elif isinstance(result, str):
+                    self._toggle_ordinance(result)
             return
         if self.bond_overlay.visible:
             if event.button == 1:
@@ -752,6 +783,22 @@ class Game:
             duration_ms=4000,
         )
 
+    def _toggle_ordinance(self, ord_id: str) -> None:
+        """Enacts or repeals a city ordinance by id."""
+        ord_def = next((o for o in ORDINANCES if o["id"] == ord_id), None)
+        if ord_def is None:
+            return
+        if ord_id in self.stats.active_ordinances:
+            self.stats.active_ordinances.remove(ord_id)
+            self.stats.add_city_message(f"Policy repealed: {ord_def['name']}.")
+            self._add_toast(f"Repealed: {ord_def['name']}", color=(200, 110, 60), duration_ms=3500)
+        else:
+            self.stats.active_ordinances.append(ord_id)
+            self.stats.add_city_message(
+                f"Policy enacted: {ord_def['name']} costs ${ord_def['monthly_cost']:,}/mo."
+            )
+            self._add_toast(f"Enacted: {ord_def['name']}", color=(80, 210, 120), duration_ms=3500)
+
     def _can_afford(self, cost: int) -> bool:
         """Returns True if the player has enough money; shows a message and returns False if not."""
         if self.stats.money < cost:
@@ -1046,6 +1093,10 @@ class Game:
         self._draw_top_hint()
         self._draw_onboarding_tip()
         self._draw_fire_flash()
+        if self.analytics_overlay.visible:
+            self.analytics_overlay.draw(self.screen, self.stats)
+        if self.ordinance_overlay.visible:
+            self.ordinance_overlay.draw(self.screen, self.stats)
         if self.bond_overlay.visible:
             self.bond_overlay.draw(self.screen, self.stats)
         if self.save_overlay.visible:

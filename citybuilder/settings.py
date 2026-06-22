@@ -10,8 +10,8 @@ milestones, colours.
 # ── Window & display ───────────────────────────────────────────────────────────
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 800
-COMMAND_BAR_HEIGHT = 296       # height of the bottom sidebar when expanded
-MINIMIZED_COMMAND_BAR_HEIGHT = 44   # height when the sidebar is hidden
+COMMAND_BAR_HEIGHT = 226       # height of the bottom sidebar when expanded
+MINIMIZED_COMMAND_BAR_HEIGHT = 36   # height when the sidebar is hidden
 FPS = 60
 
 # ── Map dimensions ─────────────────────────────────────────────────────────────
@@ -25,13 +25,14 @@ STARTING_YEAR = 1
 STARTING_MONTH = 1
 STARTING_TAX_RATE = 9        # percent; affects revenue and demand
 # Real-time seconds that pass for every simulated month at "Normal" speed
-SIM_SECONDS_PER_MONTH = 1.25
+# Normal = 5 min/year (25s/month), Fast = 2.5 min/year (12.5s/month)
+SIM_SECONDS_PER_MONTH = 25.0
 # Each tuple is (display label, seconds_per_month) for the speed selector
 SIM_SPEED_PRESETS: list[tuple[str, float]] = [
-    ("Slow",   2.5),
-    ("Normal", 1.25),
-    ("Fast",   0.4),
-    ("Max",    0.15),
+    ("Slow",   50.0),
+    ("Normal", 25.0),
+    ("Fast",   12.5),
+    ("Max",    4.0),
 ]
 
 MIN_TAX_RATE = 1
@@ -233,9 +234,9 @@ MIN_TAX_FACTOR = 0.15            # minimum growth multiplier even at max tax
 TAX_FACTOR_BASELINE = 1.2        # growth multiplier at zero tax
 
 # Base monthly growth rate before demand and tax adjustments.
-BASE_GROWTH_RATE = 0.018
+BASE_GROWTH_RATE = 0.011
 # How strongly demand (0-100) scales growth on top of the base.
-DEMAND_GROWTH_MULTIPLIER = 0.035
+DEMAND_GROWTH_MULTIPLIER = 0.022
 # Bonus growth for each service-coverage point (multiplied by service score).
 SERVICE_BONUS_MULTIPLIER = 0.18
 # Bonus demand when city utilities are running at full capacity.
@@ -331,8 +332,61 @@ POLLUTION_DECAY             = 0.25  # per-tick decay toward 0 for non-source til
 POLLUTION_PENALTY_THRESHOLD = 0.3
 # Maximum land-value penalty applied at max pollution.
 POLLUTION_LAND_VALUE_PENALTY = 0.3
+# Parks absorb pollution — each park tile reduces neighbor pollution by this fraction.
+PARK_POLLUTION_ABSORPTION = 0.25
+# Pollution removed from a park tile itself each month.
+PARK_POLLUTION_SELF_ABSORB = 0.15
 
 # ── Crime incident ─────────────────────────────────────────────────────────────
+# Education coverage lowers crime risk on educated tiles.
+EDUCATION_CRIME_REDUCTION = 12    # deducted from crime_risk when school covers the tile
+
+# ── City ordinances ────────────────────────────────────────────────────────────
+# Toggleable monthly policies. Each entry: name, monthly_cost, approval_bonus,
+# and effect keys that modify simulation values while active.
+ORDINANCES: list[dict] = [
+    {
+        "id":            "noise_ordinance",
+        "name":          "Noise Ordinance",
+        "monthly_cost":  80,
+        "approval_bonus": 3,
+        "desc":          "Quieter neighborhoods. Residents happier, industry frustrated.",
+        "effects": {"res_demand": 8, "ind_demand": -4},
+    },
+    {
+        "id":            "business_subsidy",
+        "name":          "Business Subsidy",
+        "monthly_cost":  200,
+        "approval_bonus": 2,
+        "desc":          "City funds boost commerce, raising commercial demand.",
+        "effects": {"com_demand": 12, "res_demand": 4},
+    },
+    {
+        "id":            "safety_drive",
+        "name":          "Public Safety Drive",
+        "monthly_cost":  120,
+        "approval_bonus": 5,
+        "desc":          "Extra policing reduces crime risk across all zones.",
+        "effects": {"crime_reduction": 15},
+    },
+    {
+        "id":            "green_initiative",
+        "name":          "Green Initiative",
+        "monthly_cost":  60,
+        "approval_bonus": 4,
+        "desc":          "Parks absorb 50% more pollution. Boosts residential appeal.",
+        "effects": {"park_absorption_bonus": 0.5, "res_demand": 5},
+    },
+    {
+        "id":            "free_transit",
+        "name":          "Free Public Transit",
+        "monthly_cost":  150,
+        "approval_bonus": 6,
+        "desc":          "City-funded transit reduces congestion and boosts demand.",
+        "effects": {"res_demand": 10, "com_demand": 8, "congestion_reduction": 0.5},
+    },
+]
+
 CRIME_INCIDENT_PROB     = 0.012  # per uncovered high-crime tile per month
 CRIME_DAMAGE_RATE       = 0.10   # development set back on incident tile
 CRIME_CLEANUP_COST      = 100    # money charged per crime incident

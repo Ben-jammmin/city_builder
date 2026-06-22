@@ -164,95 +164,97 @@ class SidebarPanelRenderer:
     # ── Panel draw methods ─────────────────────────────────────────────────────
 
     def draw_city_stats(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
-        """Draws the city overview panel (money, pop, jobs, date, revenue, net, goal, sparkline) and returns the bottom y."""
-        panel = self._panel(surface, x, y, width, 162, accent_color=_ACCENT_CITY)
-        # Show the city's current milestone title instead of the generic "City" label.
+        """Draws the city overview panel (money, pop, jobs, date, revenue, net, goal, sparkline). Returns bottom y."""
+        panel = self._panel(surface, x, y, width, 134, accent_color=_ACCENT_CITY)
+
+        # Title row: milestone name (left) + grade + appr% (right).
         city_title = "Outpost"
         for pop_thresh, title, _ in POPULATION_MILESTONES:
             if stats.population >= pop_thresh:
                 city_title = title
-        self._draw_text(surface, city_title, panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
-        # Approval rating — right-aligned on the title row.
-        appr = getattr(stats, "approval_rating", 75)
-        appr_color = (COLORS["money_good"] if appr >= 70
-                      else ((230, 140, 60) if appr >= 40 else COLORS["money_bad"]))
-        appr_surf = self.sidebar.font_small.render(f"Appr {appr}%", True, appr_color)
-        surface.blit(appr_surf, (panel.right - PANEL_PAD - appr_surf.get_width(), panel.y + 10))
-        col_w = (width - PANEL_PAD * 2) // 2
+        self._draw_text(surface, city_title, panel.x + PANEL_PAD, panel.y + 6, self.sidebar.font)
+
+        appr       = getattr(stats, "approval_rating", 75)
+        appr_color = (COLORS["money_good"] if appr >= 70 else ((230, 140, 60) if appr >= 40 else COLORS["money_bad"]))
+        grade      = getattr(stats, "city_grade", "")
+        score      = getattr(stats, "city_score", 0)
+        grade_col  = (COLORS["money_good"] if score >= 70 else ((230, 140, 60) if score >= 50 else COLORS["money_bad"]))
+        appr_surf  = self.sidebar.font_small.render(f"Appr {appr}%", True, appr_color)
+        grade_surf = self.sidebar.font_small.render(grade, True, grade_col)
+        surface.blit(appr_surf,  (panel.right - PANEL_PAD - appr_surf.get_width(), panel.y + 8))
+        surface.blit(grade_surf, (panel.right - PANEL_PAD - appr_surf.get_width() - grade_surf.get_width() - 8, panel.y + 8))
+
+        col_w  = (width - PANEL_PAD * 2) // 2
         left_x = panel.x + PANEL_PAD
         right_x = left_x + col_w
-        row_one   = panel.y + 30
-        row_two   = panel.y + 50
-        row_three = panel.y + 70
-        row_four  = panel.y + 90
+        r1 = panel.y + 26
+        r2 = panel.y + 43
+        r3 = panel.y + 60
 
-        # Money value uses a larger font for prominence.
+        # Row 1: money (large) + population with delta.
         money_color = COLORS["money_good"] if stats.money >= 0 else COLORS["money_bad"]
-        self._draw_text(surface, "Money", left_x, row_one, self.sidebar.font_small, COLORS["muted_text"])
-        self._draw_text(surface, f"${stats.money:,}", left_x + 46, row_one - 2, self.sidebar.font, money_color)
+        self._draw_text(surface, "$", left_x, r1 + 1, self.sidebar.font_small, COLORS["muted_text"])
+        self._draw_text(surface, f"{stats.money:,}", left_x + 12, r1 - 1, self.sidebar.font, money_color)
+        pop_delta     = stats.last_population_delta
+        pop_sign      = "+" if pop_delta > 0 else ""
+        pop_delta_str = f"({pop_sign}{pop_delta})" if pop_delta != 0 else ""
+        pop_color     = COLORS["money_good"] if pop_delta >= 0 else COLORS["money_bad"]
+        self._draw_text(surface, "Pop", right_x, r1, self.sidebar.font_small, COLORS["muted_text"])
+        self._draw_text(surface, fit_label(f"{stats.population:,} {pop_delta_str}", self.sidebar.font_small, col_w - 32),
+                        right_x + 32, r1, self.sidebar.font_small, pop_color)
 
-        # Population with delta indicator.
-        pop_delta = stats.last_population_delta
-        pop_sign  = "+" if pop_delta > 0 else ""
-        pop_delta_str = f" ({pop_sign}{pop_delta})" if pop_delta != 0 else ""
-        pop_color = COLORS["money_good"] if pop_delta >= 0 else COLORS["money_bad"]
-        self._draw_text(surface, "Pop", right_x, row_one, self.sidebar.font_small, COLORS["muted_text"])
-        self._draw_text(surface, fit_label(f"{stats.population:,}{pop_delta_str}", self.sidebar.font_small, col_w - 30),
-                        right_x + 30, row_one, self.sidebar.font_small, pop_color)
-        self._draw_stat_pair(surface, "Jobs", f"{stats.jobs:,}", left_x, row_two, col_w)
+        # Row 2: jobs + date.
         month_name = _MONTH_NAMES[(stats.month - 1) % 12]
-        self._draw_stat_pair(surface, "Date", f"Y{stats.year} {month_name}", right_x, row_two, col_w)
-        net = stats.last_revenue - stats.last_expenses
-        self._draw_stat_pair(surface, "Rev", f"${stats.last_revenue:,}", left_x, row_three, col_w, True)
-        net_str = f"+${net:,}" if net >= 0 else f"-${-net:,}"
-        self._draw_stat_pair(surface, "Net", net_str, right_x, row_three, col_w, net >= 0)
+        self._draw_stat_pair(surface, "Jobs", f"{stats.jobs:,}", left_x, r2, col_w)
+        self._draw_stat_pair(surface, "Date", f"Y{stats.year} {month_name}", right_x, r2, col_w)
 
-        # Next population milestone goal with compact progress bar.
+        # Row 3: revenue + net income.
+        net     = stats.last_revenue - stats.last_expenses
+        net_str = f"+${net:,}" if net >= 0 else f"-${-net:,}"
+        self._draw_stat_pair(surface, "Rev", f"${stats.last_revenue:,}", left_x, r3, col_w, True)
+        self._draw_stat_pair(surface, "Net", net_str, right_x, r3, col_w, net >= 0)
+
+        # Row 4: milestone goal bar + budget sparkline side by side.
+        bar_y   = panel.y + 78
+        bar_w   = width - PANEL_PAD * 2
         next_ms = next((ms for ms in POPULATION_MILESTONES if stats.population < ms[0]), None)
-        bar_w = width - PANEL_PAD * 2
         if next_ms:
             goal_pop, goal_title, _ = next_ms
             frac = min(1.0, stats.population / goal_pop) if goal_pop > 0 else 1.0
-            label = f"Goal: {goal_title}  {stats.population:,}/{goal_pop:,}"
-            self._draw_text(surface, label, left_x, row_four, self.sidebar.font_small, COLORS["muted_text"])
-            bar_y = row_four + 14
-            pygame.draw.rect(surface, (35, 45, 55), pygame.Rect(left_x, bar_y, bar_w, 7), border_radius=3)
+            self._draw_text(surface, f"→ {goal_title}  {stats.population:,}/{goal_pop:,}",
+                            left_x, bar_y, self.sidebar.font_small, COLORS["muted_text"])
+            pygame.draw.rect(surface, (35, 45, 55), pygame.Rect(left_x, bar_y + 14, bar_w, 6), border_radius=3)
             if frac > 0:
                 fill_c = COLORS["money_good"] if frac >= 0.8 else COLORS["commercial"]
-                pygame.draw.rect(surface, fill_c, pygame.Rect(left_x, bar_y, int(bar_w * frac), 7), border_radius=3)
+                pygame.draw.rect(surface, fill_c, pygame.Rect(left_x, bar_y + 14, int(bar_w * frac), 6), border_radius=3)
         else:
-            self._draw_text(surface, "All milestones achieved!", left_x, row_four, self.sidebar.font_small, COLORS["money_good"])
+            self._draw_text(surface, "All milestones reached!", left_x, bar_y, self.sidebar.font_small, COLORS["money_good"])
 
-        # 6-month budget sparkline below the goal bar.
-        spark_y = row_four + 32
-        history = stats.budget_history[-6:] if stats.budget_history else []
+        # Budget sparkline (right-aligned on the same row as the annual forecast).
+        spark_y   = bar_y + 24
+        history   = stats.budget_history[-6:] if stats.budget_history else []
+        net_cur   = stats.last_revenue - stats.last_expenses
+        annual    = net_cur * 12
+        if annual != 0:
+            ann_str   = f"~+${annual:,}/yr" if annual >= 0 else f"~-${-annual:,}/yr"
+            ann_color = COLORS["money_good"] if annual >= 0 else COLORS["money_bad"]
+            ann_surf  = self.sidebar.font_small.render(ann_str, True, ann_color)
+            surface.blit(ann_surf, (panel.right - PANEL_PAD - ann_surf.get_width(), spark_y))
         if history:
-            self._draw_text(surface, "Budget", left_x, spark_y, self.sidebar.font_small, COLORS["muted_text"])
-            # Annual forecast right-aligned on the same label row.
-            net_cur = stats.last_revenue - stats.last_expenses
-            annual  = net_cur * 12
-            if annual != 0:
-                ann_str   = f"~+${annual:,}/yr" if annual >= 0 else f"~-${-annual:,}/yr"
-                ann_color = COLORS["money_good"] if annual >= 0 else COLORS["money_bad"]
-                ann_surf  = self.sidebar.font_small.render(ann_str, True, ann_color)
-                surface.blit(ann_surf, (panel.right - PANEL_PAD - ann_surf.get_width(), spark_y))
-            spark_x = left_x + 42
-            spark_avail = bar_w - 42
-            slot_w = max(4, spark_avail // len(history))
-            max_net = max(abs(r - e) for r, e in history) or 1
-            max_bar_h = 16
+            spark_x    = left_x
+            spark_avail = bar_w - (ann_surf.get_width() + 6 if annual != 0 else 0)
+            slot_w     = max(4, spark_avail // len(history))
+            max_net    = max(abs(r - e) for r, e in history) or 1
+            bar_h      = 12
             for i, (rev, exp) in enumerate(history):
-                net_i = rev - exp
-                bh = max(2, int(abs(net_i) / max_net * max_bar_h))
-                bx = spark_x + i * slot_w
-                bar_color = COLORS["money_good"] if net_i >= 0 else COLORS["money_bad"]
-                # Positive = bar grows upward from baseline; negative = downward.
-                if net_i >= 0:
-                    pygame.draw.rect(surface, bar_color, (bx, spark_y + max_bar_h - bh, slot_w - 1, bh), border_radius=1)
-                else:
-                    pygame.draw.rect(surface, bar_color, (bx, spark_y + max_bar_h, slot_w - 1, bh), border_radius=1)
-            # Baseline separating profit and loss.
-            pygame.draw.line(surface, (55, 65, 78), (spark_x, spark_y + max_bar_h), (spark_x + len(history) * slot_w, spark_y + max_bar_h))
+                net_i    = rev - exp
+                bh       = max(2, int(abs(net_i) / max_net * bar_h))
+                bx       = spark_x + i * slot_w
+                bar_col  = COLORS["money_good"] if net_i >= 0 else COLORS["money_bad"]
+                by       = spark_y + bar_h - bh if net_i >= 0 else spark_y + bar_h
+                pygame.draw.rect(surface, bar_col, (bx, by, slot_w - 1, bh), border_radius=1)
+            pygame.draw.line(surface, (50, 62, 76),
+                             (spark_x, spark_y + bar_h), (spark_x + len(history) * slot_w, spark_y + bar_h))
 
         return panel.bottom
 
@@ -269,43 +271,50 @@ class SidebarPanelRenderer:
         return y + 32
 
     def draw_controls(self, surface: pygame.Surface, stats, x: int, y: int, width: int, fullscreen: bool, speed_index: int, speed_labels: list) -> int:
-        """Draws the controls panel (tax, pause, speed, save/load buttons). Returns the bottom y."""
-        panel = self._panel(surface, x, y, width, 96, accent_color=_ACCENT_CONTROLS)
-        self._draw_text(surface, "Controls", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
+        """Draws the controls panel (tax, pause, speed, save/load). Returns the bottom y."""
+        panel = self._panel(surface, x, y, width, 80, accent_color=_ACCENT_CONTROLS)
 
-        self._draw_text(surface, "Tax", panel.x + PANEL_PAD, panel.y + 39, self.sidebar.font_small, COLORS["muted_text"])
-        self.sidebar.tax_down_rect = pygame.Rect(panel.x + 42, panel.y + 34, 28, 24)
-        tax_rect = pygame.Rect(panel.x + 74, panel.y + 34, 50, 24)
-        self.sidebar.tax_up_rect = pygame.Rect(panel.x + 128, panel.y + 34, 28, 24)
+        # Row 1: Tax label + −/rate/+ buttons, then Pause / Full / Save / Load all in one line.
+        r1 = panel.y + 10
+        self._draw_text(surface, "Tax", panel.x + PANEL_PAD, r1 + 3, self.sidebar.font_small, COLORS["muted_text"])
+        self.sidebar.tax_down_rect = pygame.Rect(panel.x + PANEL_PAD + 26, r1, 22, 22)
+        tax_rect                   = pygame.Rect(panel.x + PANEL_PAD + 52, r1, 40, 22)
+        self.sidebar.tax_up_rect   = pygame.Rect(panel.x + PANEL_PAD + 96, r1, 22, 22)
         self._button(surface, self.sidebar.tax_down_rect, "-", disabled=stats.tax_rate <= MIN_TAX_RATE)
         self._button(surface, tax_rect, f"{stats.tax_rate}%")
-        self._button(surface, self.sidebar.tax_up_rect, "+", disabled=stats.tax_rate >= MAX_TAX_RATE)
+        self._button(surface, self.sidebar.tax_up_rect,   "+", disabled=stats.tax_rate >= MAX_TAX_RATE)
 
-        self.sidebar.pause_rect = pygame.Rect(panel.x + 166, panel.y + 10, 54, 23)
-        self.sidebar.fullscreen_rect = pygame.Rect(panel.x + 226, panel.y + 10, 56, 23)
-        self.sidebar.save_rect = pygame.Rect(panel.x + 166, panel.y + 38, 54, 23)
-        self.sidebar.load_rect = pygame.Rect(panel.x + 226, panel.y + 38, 56, 23)
-        self._button(surface, self.sidebar.pause_rect, "Pause" if not stats.paused else "Run", active=stats.paused)
-        self._button(surface, self.sidebar.fullscreen_rect, "Window" if fullscreen else "Full")
-        self._button(surface, self.sidebar.save_rect, "Save")
-        self._button(surface, self.sidebar.load_rect, "Load")
+        btn_x = panel.x + PANEL_PAD + 124
+        btn_w = (width - PANEL_PAD * 2 - 124 - BUTTON_GAP * 3) // 4
+        self.sidebar.pause_rect      = pygame.Rect(btn_x,                           r1, btn_w, 22)
+        self.sidebar.fullscreen_rect = pygame.Rect(btn_x + (btn_w + BUTTON_GAP),   r1, btn_w, 22)
+        self.sidebar.save_rect       = pygame.Rect(btn_x + (btn_w + BUTTON_GAP)*2, r1, btn_w, 22)
+        self.sidebar.load_rect       = pygame.Rect(btn_x + (btn_w + BUTTON_GAP)*3, r1, btn_w, 22)
+        self._button(surface, self.sidebar.pause_rect,      "Pause" if not stats.paused else "Run", active=stats.paused)
+        self._button(surface, self.sidebar.fullscreen_rect, "Win" if fullscreen else "Full")
+        self._button(surface, self.sidebar.save_rect,       "Save")
+        self._button(surface, self.sidebar.load_rect,       "Load")
 
-        self._draw_text(surface, "Speed", panel.x + PANEL_PAD, panel.y + 71, self.sidebar.font_small, COLORS["muted_text"])
-        n = len(speed_labels)
-        btn_area_x = panel.x + PANEL_PAD + 46
-        btn_area_w = width - PANEL_PAD * 2 - 46
-        btn_w = (btn_area_w - BUTTON_GAP * (n - 1)) // n
+        # Row 2: Speed label + preset buttons.
+        r2 = panel.y + 40
+        self._draw_text(surface, "Speed", panel.x + PANEL_PAD, r2 + 3, self.sidebar.font_small, COLORS["muted_text"])
+        n          = len(speed_labels)
+        spd_area_x = panel.x + PANEL_PAD + 46
+        spd_area_w = width - PANEL_PAD * 2 - 46
+        spd_btn_w  = (spd_area_w - BUTTON_GAP * (n - 1)) // n
         for i, label in enumerate(speed_labels):
-            rect = pygame.Rect(btn_area_x + i * (btn_w + BUTTON_GAP), panel.y + 66, btn_w, 24)
+            rect = pygame.Rect(spd_area_x + i * (spd_btn_w + BUTTON_GAP), r2, spd_btn_w, 22)
             self.sidebar.speed_rects.append((rect, i))
             self._button(surface, rect, label, active=(i == speed_index))
-        # Bond debt indicator on title row (only shown when bonds are active).
+
+        # Bond debt indicator (right-aligned in row 2 area if no space conflict).
         bonds = getattr(stats, "bonds", [])
         if bonds:
-            monthly = sum(b["monthly_payment"] for b in bonds)
-            bond_str = f"Debt ${monthly:,}/mo  [B]"
+            monthly   = sum(b["monthly_payment"] for b in bonds)
+            bond_str  = f"Debt ${monthly:,}/mo"
             bond_surf = self.sidebar.font_small.render(bond_str, True, (220, 165, 55))
-            surface.blit(bond_surf, (panel.right - PANEL_PAD - bond_surf.get_width(), panel.y + 10))
+            surface.blit(bond_surf, (panel.right - PANEL_PAD - bond_surf.get_width(), panel.y + 62))
+
         return panel.bottom
 
     def _demand_arrow(self, current: int, prev: int) -> str:
@@ -319,6 +328,8 @@ class SidebarPanelRenderer:
 
     def draw_demand_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
         """Draws three horizontal demand bars for Residential, Commercial, and Industrial zones. Returns the bottom y."""
+        demand_history = getattr(stats, "demand_history", [])
+        spark_w = 36 if demand_history else 0
         panel = self._panel(surface, x, y, width, 82, accent_color=_ACCENT_DEMAND)
         self._draw_text(surface, "Demand", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
         prev_res = getattr(stats, "prev_demand_residential", stats.demand_residential)
@@ -327,57 +338,77 @@ class SidebarPanelRenderer:
         res_lbl = self._demand_arrow(stats.demand_residential, prev_res) + "Res"
         com_lbl = self._demand_arrow(stats.demand_commercial, prev_com) + "Com"
         ind_lbl = self._demand_arrow(stats.demand_industrial, prev_ind) + "Ind"
-        self._bar(surface, res_lbl, stats.demand_residential, COLORS["residential"], panel.x + PANEL_PAD, panel.y + 32, width - PANEL_PAD * 2)
-        self._bar(surface, com_lbl, stats.demand_commercial, COLORS["commercial"], panel.x + PANEL_PAD, panel.y + 52, width - PANEL_PAD * 2)
-        self._bar(surface, ind_lbl, stats.demand_industrial, COLORS["industrial"], panel.x + PANEL_PAD, panel.y + 72, width - PANEL_PAD * 2)
+        bar_w = width - PANEL_PAD * 2 - spark_w - (4 if spark_w else 0)
+        self._bar(surface, res_lbl, stats.demand_residential, COLORS["residential"], panel.x + PANEL_PAD, panel.y + 32, bar_w)
+        self._bar(surface, com_lbl, stats.demand_commercial, COLORS["commercial"], panel.x + PANEL_PAD, panel.y + 52, bar_w)
+        self._bar(surface, ind_lbl, stats.demand_industrial, COLORS["industrial"], panel.x + PANEL_PAD, panel.y + 72, bar_w)
+        # Mini sparklines (last 6 months per zone type) — drawn to the right of bars.
+        if demand_history:
+            hist6 = demand_history[-6:]
+            spark_x = panel.x + PANEL_PAD + bar_w + 4
+            for si, (col, di) in enumerate(((COLORS["residential"], 0), (COLORS["commercial"], 1), (COLORS["industrial"], 2))):
+                vals = [h[di] for h in hist6]
+                sy0 = panel.y + 30 + si * 20
+                self._mini_sparkline(surface, spark_x, sy0, spark_w, 14, vals, col)
         return panel.bottom
 
+    def _mini_sparkline(self, surface, sx, sy, w, h, vals, col) -> None:
+        """Draws a tiny 1px-stroke line chart for a list of values."""
+        if len(vals) < 2:
+            return
+        vmin, vmax = min(vals), max(vals)
+        vrange = max(1, vmax - vmin)
+        pts = [
+            (sx + int(i / (len(vals) - 1) * w),
+             sy + h - 1 - int((v - vmin) / vrange * (h - 2)))
+            for i, v in enumerate(vals)
+        ]
+        pygame.draw.lines(surface, col, False, pts, 1)
+
     def draw_system_panel(self, surface: pygame.Surface, stats, x: int, y: int, width: int) -> int:
-        """Draws the systems panel showing power, water, fire, police, and education status. Returns the bottom y."""
-        panel = self._panel(surface, x, y, width, 154, accent_color=_ACCENT_SYSTEMS)
-        self._draw_text(surface, "Systems", panel.x + PANEL_PAD, panel.y + 8, self.sidebar.font)
+        """Draws the systems panel as a compact 2-column metric grid. Returns the bottom y."""
+        panel = self._panel(surface, x, y, width, 108, accent_color=_ACCENT_SYSTEMS)
+        self._draw_text(surface, "Systems", panel.x + PANEL_PAD, panel.y + 6, self.sidebar.font)
 
-        dot_x = panel.x + PANEL_PAD + 4
-        txt_x = panel.x + PANEL_PAD + 14
+        # 2-column layout: left metrics / right metrics
+        col_w  = (width - PANEL_PAD * 2 - 8) // 2
+        left_x = panel.x + PANEL_PAD
+        right_x = left_x + col_w + 8
+        row_h  = 17
 
-        power_color = self._utility_color(stats.power_capacity, stats.power_usage, stats.unpowered_zones)
-        self._draw_status_dot(surface, dot_x, panel.y + 33, power_color)
-        self._draw_text(surface, f"Power  {stats.power_usage}/{stats.power_capacity}  ({stats.power_satisfaction}%)",
-                        txt_x, panel.y + 28, self.sidebar.font_small, power_color)
+        power_col  = self._utility_color(stats.power_capacity, stats.power_usage, stats.unpowered_zones)
+        water_col  = self._utility_color(stats.water_capacity, stats.water_usage, stats.unwatered_zones)
+        fire_col   = COLORS["money_good"] if stats.fire_uncovered_zones == 0 and stats.average_fire_risk < HIGH_RISK_THRESHOLD else COLORS["money_bad"]
+        police_col = COLORS["money_good"] if stats.police_uncovered_zones == 0 and stats.average_crime_risk < HIGH_RISK_THRESHOLD else COLORS["money_bad"]
+        edu_col    = COLORS["money_good"] if stats.education_coverage_percent >= 70 else COLORS["muted_text"]
+        health_col = COLORS["money_good"] if stats.health_coverage_percent >= 70 else COLORS["muted_text"]
 
-        water_color = self._utility_color(stats.water_capacity, stats.water_usage, stats.unwatered_zones)
-        self._draw_status_dot(surface, dot_x, panel.y + 49, water_color)
-        self._draw_text(surface, f"Water  {stats.water_usage}/{stats.water_capacity}  ({stats.water_satisfaction}%)",
-                        txt_x, panel.y + 44, self.sidebar.font_small, water_color)
+        metrics_left = [
+            (f"Power  {stats.power_satisfaction}%",  power_col),
+            (f"Water  {stats.water_satisfaction}%",  water_col),
+            (f"School {stats.education_coverage_percent}%", edu_col),
+        ]
+        metrics_right = [
+            (f"Fire cov  {stats.fire_coverage_percent}%", fire_col),
+            (f"Crime     {stats.average_crime_risk}%",    police_col),
+            (f"Health    {stats.health_coverage_percent}%", health_col),
+        ]
 
-        fire_color = COLORS["money_good"] if stats.fire_uncovered_zones == 0 and stats.average_fire_risk < HIGH_RISK_THRESHOLD else COLORS["money_bad"]
-        self._draw_status_dot(surface, dot_x, panel.y + 65, fire_color)
-        self._draw_text(surface, f"Fire   cov {stats.fire_coverage_percent}%  risk {stats.average_fire_risk}%",
-                        txt_x, panel.y + 60, self.sidebar.font_small, fire_color)
+        dot_ox = 5   # dot x offset from column start
+        txt_ox = 14  # text x offset from column start
+        base_y = panel.y + 26
+        for i, (label, col) in enumerate(metrics_left):
+            ry = base_y + i * row_h
+            self._draw_status_dot(surface, left_x + dot_ox, ry + 6, col)
+            self._draw_text(surface, label, left_x + txt_ox, ry, self.sidebar.font_small, col)
+        for i, (label, col) in enumerate(metrics_right):
+            ry = base_y + i * row_h
+            self._draw_status_dot(surface, right_x + dot_ox, ry + 6, col)
+            self._draw_text(surface, label, right_x + txt_ox, ry, self.sidebar.font_small, col)
 
-        police_color = COLORS["money_good"] if stats.police_uncovered_zones == 0 and stats.average_crime_risk < HIGH_RISK_THRESHOLD else COLORS["money_bad"]
-        self._draw_status_dot(surface, dot_x, panel.y + 81, police_color)
-        self._draw_text(surface, f"Police cov {stats.police_coverage_percent}%  crime {stats.average_crime_risk}%",
-                        txt_x, panel.y + 76, self.sidebar.font_small, police_color)
-
-        edu_ok = stats.education_coverage_percent >= 80 and stats.health_coverage_percent >= 80
-        edu_color = COLORS["money_good"] if edu_ok else COLORS["muted_text"]
-        self._draw_status_dot(surface, dot_x, panel.y + 97, edu_color)
-        self._draw_text(surface, f"School {stats.education_coverage_percent}%  Health {stats.health_coverage_percent}%",
-                        txt_x, panel.y + 92, self.sidebar.font_small, edu_color)
-
-        # Issue summary line.
-        if stats.unpowered_zones or stats.unwatered_zones or stats.fire_uncovered_zones or stats.police_uncovered_zones:
-            issue_text = (
-                f"Unserved — P:{stats.unpowered_zones} W:{stats.unwatered_zones} "
-                f"F:{stats.fire_uncovered_zones} Po:{stats.police_uncovered_zones}"
-            )
-            issue_color = COLORS["money_bad"]
-        else:
-            issue_text = "All zones connected"
-            issue_color = COLORS["muted_text"]
-        self._draw_text(surface, issue_text, panel.x + PANEL_PAD, panel.y + 112, self.sidebar.font_small, issue_color)
-        self._bar(surface, "Svc", stats.service_score, COLORS["service"], panel.x + PANEL_PAD, panel.y + 132, width - PANEL_PAD * 2)
+        # Service score bar at the bottom of the panel.
+        self._bar(surface, "Svc", stats.service_score, COLORS["service"],
+                  panel.x + PANEL_PAD, panel.y + 88, width - PANEL_PAD * 2)
         return panel.bottom
 
     def _draw_status_dot(self, surface: pygame.Surface, x: int, y: int, color: tuple) -> None:

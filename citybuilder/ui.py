@@ -184,16 +184,12 @@ class Sidebar:
         as the window is resized.  The optional info column (tile inspect +
         advisor) is hidden on narrow windows to save space.
         """
-        header_y = self.rect.y + 8
-        self.panels._draw_text(surface, "City Builder", BAR_PAD, header_y, self.font_large)
-        # Current view mode shown in muted text next to the title.
-        view_text = self.font_small.render(f"{view_mode.value.title()} view", True, COLORS["muted_text"])
-        surface.blit(view_text, (BAR_PAD + 142, header_y + 6))
-        self.minimize_rect = pygame.Rect(self.rect.right - 72, header_y, 58, 24)
+        # Floating Hide button — anchored to the top-right of the bar itself.
+        self.minimize_rect = pygame.Rect(self.rect.right - 56, self.rect.y + 4, 48, 20)
         self.panels._button(surface, self.minimize_rect, "Hide")
 
         content_x = self.rect.x + BAR_PAD
-        content_y = self.rect.y + 42
+        content_y = self.rect.y + 6
         content_w = self.rect.width - BAR_PAD * 2
 
         # Fixed left column and status column; centre and info fill the rest.
@@ -236,14 +232,13 @@ class Sidebar:
     def _draw_minimized(self, surface: pygame.Surface, stats, active_tool: Tool, view_mode: ViewMode) -> None:
         """Draws the compact single-line summary when the sidebar is minimized."""
         y = self.rect.y + 9
-        self.panels._draw_text(surface, "City Builder", BAR_PAD, y - 1, self.font)
         summary = (
-            f"${stats.money:,}  Pop {stats.population:,}  Jobs {stats.jobs:,}  "
+            f"${stats.money:,}  Pop {stats.population:,}  "
             f"{TOOL_LABELS[active_tool]}  {view_mode.value.title()} view"
         )
-        fitted = fit_label(summary, self.font_small, max(80, self.rect.width - 220))
-        self.panels._draw_text(surface, fitted, BAR_PAD + 112, y + 2, self.font_small, COLORS["muted_text"])
-        self.minimize_rect = pygame.Rect(self.rect.right - 72, self.rect.y + 10, 58, 24)
+        fitted = fit_label(summary, self.font_small, max(80, self.rect.width - 120))
+        self.panels._draw_text(surface, fitted, BAR_PAD, y + 1, self.font_small, COLORS["muted_text"])
+        self.minimize_rect = pygame.Rect(self.rect.right - 56, self.rect.y + 6, 48, 20)
         self.panels._button(surface, self.minimize_rect, "Show")
 
     def _draw_tile_compact(self, surface: pygame.Surface, city_map: CityMap, hover_tile, x: int, y: int, width: int) -> int:

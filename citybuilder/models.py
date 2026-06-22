@@ -9,6 +9,7 @@ Contains:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -495,10 +496,18 @@ class CityStats:
     bonds: list = field(default_factory=list)
     # Monthly bond-payment expense (shown in budget breakdown).
     exp_bonds: int = 0
+    # How many consecutive months the city has been running a deficit (money < 0).
+    months_in_deficit: int = 0
+    # Set of active ordinance IDs (from settings.ORDINANCES).
+    active_ordinances: list = field(default_factory=list)
     # The advisor message feed — last 5 messages are kept.
     messages: list[str] = field(default_factory=lambda: ["Game starts paused. Press Space or Run."])
     # Last 12 months of (revenue, expenses) pairs for the budget trend display.
     budget_history: list = field(default_factory=list)
+    # Last 24 months of population snapshots (one per tick).
+    population_history: list = field(default_factory=list)
+    # Last 12 months of (res_demand, com_demand, ind_demand) tuples.
+    demand_history: list = field(default_factory=list)
     # Active city events: each entry is an event dict from CITY_EVENTS with an added
     # "remaining" key counting down to 0 (instant events have duration=0 and never stored here).
     active_events: list = field(default_factory=list)
@@ -561,3 +570,38 @@ class CityStats:
         if zone == ZoneType.INDUSTRIAL:
             return self.demand_industrial
         return 0
+
+    @property
+    def city_score(self) -> int:
+        """Composite city score 0-100 based on population, budget, approval, and services."""
+        score = 0.0
+        # Population (logarithmic, up to 40 pts)
+        if self.population > 0:
+            score += min(40.0, math.log10(max(1, self.population)) * 13.0)
+        # Approval rating (up to 20 pts)
+        score += self.approval_rating * 0.20
+        # Budget health: revenue vs expenses ratio (up to 15 pts)
+        if self.last_expenses > 0 and self.last_revenue > 0:
+            ratio = min(1.5, self.last_revenue / self.last_expenses)
+            score += ratio * 10.0
+        elif self.last_revenue > 0:
+            score += 10.0
+        # Service coverage average (up to 15 pts)
+        avg_svc = (self.fire_coverage_percent + self.police_coverage_percent +
+                   self.education_coverage_percent + self.health_coverage_percent) / 4.0
+        score += avg_svc * 0.15
+        # Crime and fire risk penalty (up to -10 pts)
+        risk_penalty = (self.average_crime_risk + self.average_fire_risk) / 2.0
+        score -= risk_penalty * 0.10
+        return max(0, min(100, int(score)))
+
+    @property
+    def city_grade(self) -> str:
+        """Letter grade derived from city_score."""
+        s = self.city_score
+        if s >= 90: return "A+"
+        if s >= 80: return "A"
+        if s >= 70: return "B"
+        if s >= 60: return "C"
+        if s >= 50: return "D"
+        return "F"

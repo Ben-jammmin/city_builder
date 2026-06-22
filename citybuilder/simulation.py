@@ -130,6 +130,10 @@ from .settings import (
     POPULATION_MILESTONES,
     ROAD_TRAFFIC_CAPACITY,
     BOND_OPTIONS,
+    PARK_POLLUTION_ABSORPTION,
+    PARK_POLLUTION_SELF_ABSORB,
+    EDUCATION_CRIME_REDUCTION,
+    ORDINANCES,
 )
 from .models import POWER_SOURCE_BUILDINGS, WATER_SOURCE_BUILDINGS
 
@@ -258,6 +262,10 @@ class Simulation:
         ))
         exp_recreation = int(self.city_map.recreation_maintenance_cost())
 
+        # ── Ordinance costs ────────────────────────────────────────────────────
+        active_ord_defs = [o for o in ORDINANCES if o["id"] in self.stats.active_ordinances]
+        exp_ordinances = sum(o["monthly_cost"] for o in active_ord_defs)
+
         # ── Bond payments ──────────────────────────────────────────────────────
         exp_bonds = sum(b["monthly_payment"] for b in self.stats.bonds)
         updated_bonds = []
@@ -269,7 +277,7 @@ class Simulation:
                 self.stats.add_city_message(f"Bond of ${b['amount']:,} fully repaid.")
         self.stats.bonds = updated_bonds
 
-        expenses = exp_roads + exp_utilities + exp_buildings + exp_recreation + exp_bonds
+        expenses = exp_roads + exp_utilities + exp_buildings + exp_recreation + exp_bonds + exp_ordinances
         self.stats.exp_roads = exp_roads
         self.stats.exp_utilities = exp_utilities
         self.stats.exp_buildings = exp_buildings
@@ -283,6 +291,35 @@ class Simulation:
         # Record this month's finances for the budget trend display (keep 12 months).
         self.stats.budget_history.append((revenue, expenses))
         self.stats.budget_history = self.stats.budget_history[-12:]
+        # Record population and demand snapshots for the analytics overlay.
+        self.stats.population_history.append(self.stats.population)
+        self.stats.population_history = self.stats.population_history[-24:]
+        self.stats.demand_history.append((
+            self.stats.demand_residential,
+            self.stats.demand_commercial,
+            self.stats.demand_industrial,
+        ))
+        self.stats.demand_history = self.stats.demand_history[-12:]
+
+        # Track how long the city has been running a deficit.
+        if self.stats.money < 0:
+            self.stats.months_in_deficit += 1
+        else:
+            self.stats.months_in_deficit = 0
+
+        # After 6 consecutive months in debt, emergency state aid is triggered.
+        if self.stats.months_in_deficit == 6:
+            relief = max(2000, abs(self.stats.money) + 500)
+            self.stats.money += relief
+            self.stats.add_city_message(
+                f"Emergency state aid: ${relief:,} to prevent bankruptcy. Raise taxes!"
+            )
+        elif self.stats.months_in_deficit > 0 and self.stats.months_in_deficit % 3 == 0:
+            self.stats.add_city_message(
+                f"Warning: {self.stats.months_in_deficit} months in deficit. "
+                "Raise taxes or cut spending before the city goes bankrupt."
+            )
+
         self.stats.advance_month()
         self._update_traffic()
         self._update_pollution()
@@ -341,6 +378,11 @@ class Simulation:
             # Very high tax rates cause an extra development penalty.
             if self.stats.tax_rate >= HIGH_TAX_THRESHOLD:
                 tile.development = max(0.0, tile.development - HIGH_TAX_DECLINE_RATE)
+            # Severe civic unrest — citizens abandon developed zones.
+            if self.stats.approval_rating < 20:
+                tile.development = max(0.0, tile.development - 0.018)
+            elif self.stats.approval_rating < 30:
+                tile.development = max(0.0, tile.development - 0.008)
 
             tile.fire_risk = self._fire_risk_for(x, y)
             tile.crime_risk = self._crime_risk_for(x, y)
@@ -495,10 +537,14 @@ class Simulation:
             risk -= CRIME_RISK_COVERAGE_REDUCTION
         else:
             risk += CRIME_RISK_NO_COVERAGE
+        if tile.education_coverage:
+            risk -= EDUCATION_CRIME_REDUCTION   # educated communities have lower crime
         if not self.city_map.has_adjacent_road(x, y):
             risk += CRIME_RISK_NO_ROAD
         if self.stats.tax_rate >= HIGH_TAX_THRESHOLD:
             risk += CRIME_RISK_HIGH_TAX    # economic strain correlates with crime
+        if "safety_drive" in self.stats.active_ordinances:
+            risk -= 15
 
         return self._clamp_percent(risk)
 
@@ -682,6 +728,17 @@ class Simulation:
                     if 0 <= nx < W and 0 <= ny < H:
                         spread[nx][ny] += contrib
 
+        # Parks absorb pollution; green_initiative ordinance boosts absorption.
+        green_active = "green_initiative" in self.stats.active_ordinances
+        absorption = PARK_POLLUTION_ABSORPTION * (1.5 if green_active else 1.0)
+        for x, y, tile in self.city_map.iter_tiles():
+            if tile.zone != ZoneType.PARK:
+                continue
+            spread[x][y] = max(0.0, spread[x][y] - PARK_POLLUTION_SELF_ABSORB)
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < W and 0 <= ny < H:
+                    spread[nx][ny] = max(0.0, spread[nx][ny] * (1.0 - absorption))
+
         # Apply decay and clamp; write back.
         for x, y, tile in self.city_map.iter_tiles():
             new_val = spread[x][y]
@@ -782,6 +839,11 @@ class Simulation:
         elif self.stats.money < 2000:
             score -= 5
 
+        # Active ordinances boost approval.
+        for o in ORDINANCES:
+            if o["id"] in self.stats.active_ordinances:
+                score += o.get("approval_bonus", 0)
+
         self.stats.approval_rating = self._clamp_percent(score)
 
     # ── Demand calculation ─────────────────────────────────────────────────────
@@ -812,12 +874,18 @@ class Simulation:
         # Recreation tiles contribute to residential and commercial demand.
         rec_res_bonus, rec_com_bonus = self.city_map.recreation_demand_bonus()
 
+        # Ordinance congestion reduction (free_transit halves congestion penalty).
+        congestion_mult = 1.0
+        for o in ORDINANCES:
+            if o["id"] in self.stats.active_ordinances:
+                congestion_mult *= (1.0 - o.get("effects", {}).get("congestion_reduction", 0))
+
         # Count congested road tiles and cap the penalty.
         congested = sum(
             1 for _, _, t in self.city_map.iter_tiles()
             if t.has_road and t.traffic_load > ROAD_TRAFFIC_CAPACITY
         )
-        congestion_penalty = min(25, congested * CONGESTION_DEMAND_PENALTY)
+        congestion_penalty = min(25, congested * CONGESTION_DEMAND_PENALTY * congestion_mult)
 
         # Aggregate active-event demand modifiers.
         ev_res = ev_com = ev_ind = 0
@@ -826,6 +894,14 @@ class Simulation:
             ev_res += fx.get("res_demand", 0)
             ev_com += fx.get("com_demand", 0)
             ev_ind += fx.get("ind_demand", 0)
+
+        # Aggregate ordinance demand modifiers.
+        for o in ORDINANCES:
+            if o["id"] in self.stats.active_ordinances:
+                fx = o.get("effects", {})
+                ev_res += fx.get("res_demand", 0)
+                ev_com += fx.get("com_demand", 0)
+                ev_ind += fx.get("ind_demand", 0)
 
         # Residential: more jobs → people want to move in; high population satisfies demand.
         self.stats.demand_residential = self._clamp_percent(
